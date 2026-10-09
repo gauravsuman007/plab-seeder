@@ -1,0 +1,14 @@
+#!/bin/sh
+# Let the seeder reach the WebUI over the compose network without a login.
+# Runs before qBittorrent starts. A whitelist you already set is left alone.
+CONF=/config/qBittorrent/qBittorrent.conf
+mkdir -p /config/qBittorrent
+[ -f "$CONF" ] || printf '[Preferences]\n' > "$CONF"
+grep -q 'AuthSubnetWhitelist=' "$CONF" && exit 0
+grep -q '^\[Preferences\]' "$CONF" || printf '\n[Preferences]\n' >> "$CONF"
+sed -i '/^\[Preferences\]/a\
+WebUI\\AuthSubnetWhitelistEnabled=true\
+WebUI\\AuthSubnetWhitelist=172.16.0.0/12, 192.168.0.0/16, 10.0.0.0/8\
+WebUI\\HostHeaderValidation=false\
+WebUI\\CSRFProtection=false' "$CONF"
+chown -R abc:abc /config/qBittorrent 2>/dev/null || true

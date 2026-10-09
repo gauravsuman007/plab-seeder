@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 pornolab_cookies.json
 .DS_Store
+qbit-config/
+downloads/

@@ -50,3 +50,18 @@ instead of only adding what you click.
 
 See [AGENTS.md](AGENTS.md) for the policy an AI agent working on this repo
 follows (credentials, scraping etiquette, scope).
+
+## Standalone stack (seeder + qBittorrent)
+
+For hosts without the vpngate gateway, `docker-compose.standalone.yml` runs the
+seeder next to a regular qBittorrent that stays usable for normal downloads:
+
+```bash
+docker compose -f docker-compose.standalone.yml up -d --build
+```
+
+Seeder UI on `:8010`, qBittorrent on `:8080`. On first start an init script
+whitelists private subnets on qBittorrent's WebUI so the seeder needs no login;
+if you expose `:8080` beyond your LAN, set a WebUI password instead and enter it
+in the seeder's Settings. Optional env: `DOWNLOADS_DIR`, `QBIT_WEBUI_PORT`,
+`QBIT_PEER_PORT`, `SEEDER_PORT`, `APP_PASSWORD`, `PUID`, `PGID`, `TZ`.
