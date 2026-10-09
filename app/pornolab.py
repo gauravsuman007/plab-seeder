@@ -209,11 +209,13 @@ class Pornolab:
             browser = await pw.chromium.launch(args=["--no-sandbox"])
             page = await browser.new_page(user_agent=UA)
             try:
-                await page.goto(reg_url, wait_until="networkidle")
+                await page.goto(reg_url, wait_until="load")
                 # the "I agree" link submits a hidden form (id="go-to-reg") via jQuery;
                 # match on the onclick handler rather than the (Russian) link text
                 await page.click('a[onclick*="go-to-reg"]')
-                await page.wait_for_load_state("networkidle")
+                # "networkidle" never fires once Turnstile is on the page — its own
+                # background requests keep the network busy, so wait for "load" only
+                await page.wait_for_load_state("load")
                 # Turnstile resolves asynchronously after the form page loads — poll
                 # the hidden input it fills in rather than trusting the first snapshot
                 for _ in range(20):
