@@ -1,7 +1,6 @@
 services:
   pornolab-seeder:
-    build: .
-    image: pornolab-seeder:latest
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
     container_name: pornolab-seeder
     environment:
       DATA_DIR: /data
