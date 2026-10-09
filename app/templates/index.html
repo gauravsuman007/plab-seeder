@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pornolab-seeder</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <h1>pornolab-seeder</h1>
+  </div>
+  <div class="pills" id="statusPills"></div>
+  <label class="auto-toggle">
+    <input type="checkbox" id="autoToggle">
+    <span>Auto-seed</span>
+  </label>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="dashboard">Dashboard</button>
+  <button class="tab" data-tab="candidates">Candidates</button>
+  <button class="tab" data-tab="torrents">Torrents</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="events">Events</button>
+</nav>
+
+<main>
+
+  <!-- ============================ DASHBOARD ============================ -->
+  <section class="panel active" id="panel-dashboard">
+
+    <!-- Logged out: login card -->
+    <div class="card" id="loginCard" hidden>
+      <h2>Log in to PornoLab</h2>
+      <p class="muted">Your own account. Credentials are kept only in this app's local settings
+         store (encrypted at rest is up to your host); nothing is sent anywhere else.</p>
+      <form id="loginForm" class="form-grid">
+        <label>Username
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Password
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="remember" checked>
+          <span>Remember (store the password so the seeder can re-login on its own)</span>
+        </label>
+        <div class="captcha-block" id="captchaBlock" hidden>
+          <img id="captchaImg" alt="captcha">
+          <label>Captcha code
+            <input type="text" name="captcha" autocomplete="off">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Log in</button>
+          <span class="form-msg" id="loginMsg"></span>
+        </div>
+      </form>
+    </div>
+
+    <!-- Logged in: profile + guard + budget -->
+    <div id="profileArea" hidden>
+      <div class="grid-3">
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Profile</h2>
+            <div class="card-head-actions">
+              <span class="muted small" id="profileAt">—</span>
+              <button class="btn small" id="refreshProfileBtn">Refresh</button>
+              <button class="btn small danger" id="logoutBtn">Log out</button>
+            </div>
+          </div>
+          <dl class="kv" id="profileKv"></dl>
+        </div>
+
+        <div class="card">
+          <h2>Tier &amp; download guard</h2>
+          <dl class="kv" id="guardKv"></dl>
+          <div class="bar">
+            <div class="bar-fill" id="guardBarFill"></div>
+          </div>
+          <p class="muted small" id="guardReason"></p>
+          <label class="checkbox-row guard-override-row">
+            <input type="checkbox" id="guardOverrideToggle">
+            <span>Ignore the download guard <strong>(ban risk — owner's call)</strong>.
+              Auto-seed still paces itself by ratio: small files first, growing as it recovers.</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <h2>Daily .torrent budget</h2>
+          <dl class="kv" id="budgetKv"></dl>
+          <div class="bar">
+            <div class="bar-fill" id="budgetBarFill"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h2>Today vs. yesterday</h2>
+          <table class="table" id="statsTable"></table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>History</h2>
+            <select id="historyRange">
+              <option value="7">7 days</option>
+              <option value="30" selected>30 days</option>
+              <option value="90">90 days</option>
+            </select>
+          </div>
+          <svg id="historyChart" viewBox="0 0 640 220" preserveAspectRatio="none"></svg>
+          <div class="legend">
+            <span><i class="sw sw-rating"></i>Rating</span>
+            <span><i class="sw sw-down"></i>Downloaded</span>
+            <span><i class="sw sw-up"></i>Credited upload</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ CANDIDATES ============================ -->
+  <section class="panel" id="panel-candidates">
+    <div class="card">
+      <div class="card-head">
+        <h2>Best matches for seeding</h2>
+        <div class="card-head-actions">
+          <span class="muted small" id="scanAt">never scanned</span>
+          <button class="btn small" id="scanBtn">Scan now</button>
+        </div>
+      </div>
+      <p class="muted small" id="scanStats"></p>
+      <div class="table-wrap">
+        <table class="table" id="candidatesTable">
+          <thead>
+            <tr>
+              <th>Title</th><th>Forum</th><th>Size</th><th>Seed/Leech</th><th>Grabs</th>
+              <th>Score</th><th>Cost</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ TORRENTS ============================ -->
+  <section class="panel" id="panel-torrents">
+    <div class="card">
+      <div class="card-head">
+        <h2>Seeding (qBittorrent)</h2>
+        <span class="muted small" id="torrentsTotals"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="torrentsTable">
+          <thead>
+            <tr>
+              <th>Name</th><th>Progress</th><th>State</th><th>DL/UP speed</th>
+              <th>Downloaded/Uploaded</th><th>Ratio</th><th>Seeds/Leechs</th>
+              <th>Seeding time</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ SETTINGS ============================ -->
+  <section class="panel" id="panel-settings">
+    <form id="settingsForm">
+      <div class="grid-2">
+
+        <div class="card">
+          <h2>qBittorrent</h2>
+          <div class="form-grid">
+            <label>WebUI URL <input type="text" name="qbit_url"></label>
+            <label>Username <input type="text" name="qbit_username" autocomplete="off"></label>
+            <label>Password <input type="password" name="qbit_password" autocomplete="new-password"
+                                    placeholder="•••••••• (unchanged)"></label>
+            <label>Category <input type="text" name="qbit_category"></label>
+            <label>Save path <input type="text" name="qbit_save_path"></label>
+            <label>Gateway URL <input type="text" name="gateway_url"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>PornoLab</h2>
+          <div class="form-grid">
+            <label>Site URL <input type="text" name="pornolab_url"></label>
+          </div>
+          <p class="muted small">Account credentials are set from the Dashboard's login card, not here.</p>
+        </div>
+
+        <div class="card">
+          <h2>Automation</h2>
+          <div class="form-grid">
+            <label>Daily .torrent budget <input type="number" name="daily_torrent_budget" min="0"></label>
+            <label>Max active downloads <input type="number" name="max_active_downloads" min="0"></label>
+            <label>Tracker pages per scan <input type="number" name="scan_pages" min="1"></label>
+            <label>Scan order (tracker.php o=) <input type="number" name="scan_order"></label>
+            <label>Scan interval (min) <input type="number" name="scan_interval_min" min="1"></label>
+            <label>Profile refresh interval (min) <input type="number" name="profile_interval_min" min="1"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Selection rules</h2>
+          <div class="form-grid">
+            <label>Min leechers <input type="number" name="min_leechers" min="0"></label>
+            <label>Max seeders <input type="number" name="max_seeders" min="0"></label>
+            <label>Min size (MB) <input type="number" name="min_size_mb" min="0"></label>
+            <label>Max size (MB) <input type="number" name="max_size_mb" min="0"></label>
+            <label>Exclude forum IDs <input type="text" name="exclude_forums" placeholder="e.g. 12 34 56"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Download guard</h2>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" name="allow_crossing">
+              <span>Allow crossing the 2&nbsp;GB newbie line (ratio mode)</span>
+            </label>
+            <label>Ratio target <input type="number" step="0.01" name="ratio_target" min="0"></label>
+            <label>Overhead allowance <input type="number" step="0.01" name="overhead" min="0"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Pruning</h2>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" name="prune">
+              <span>Remove torrents automatically</span>
+            </label>
+            <label>Min seed hours <input type="number" name="min_seed_hours" min="0"></label>
+            <label>Idle hours before removable <input type="number" name="idle_hours" min="0"></label>
+            <label>Disk budget (GB) <input type="number" name="disk_budget_gb" min="0"></label>
+          </div>
+        </div>
+
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Save settings</button>
+        <span class="form-msg" id="settingsMsg"></span>
+      </div>
+    </form>
+  </section>
+
+  <!-- ============================ EVENTS ============================ -->
+  <section class="panel" id="panel-events">
+    <div class="card">
+      <div class="card-head">
+        <h2>Events</h2>
+        <button class="btn small" id="refreshEventsBtn">Refresh</button>
+      </div>
+      <ul class="events" id="eventsList"></ul>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

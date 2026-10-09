@@ -1,0 +1,9 @@
+#!/bin/sh
+# Compile proxy.c at container start (Alpine musl, no Python needed).
+# gcc + libcurl-dev are added transiently; the compiled binary stays in /config/proxy/.
+set -e
+apk add --no-cache gcc musl-dev libcurl-dev 2>/dev/null || true
+mkdir -p /config/proxy
+cp /torrent-proxy/proxy.c /config/proxy/proxy.c
+gcc -O2 -o /config/proxy/proxy /config/proxy/proxy.c -lcurl -lpthread
+echo "[torrent-proxy] compiled OK"

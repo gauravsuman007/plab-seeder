@@ -1,0 +1,3 @@
+#!/bin/sh
+# s6 longrun service — keeps the compiled proxy running inside the Prowlarr container.
+exec /config/proxy/proxy
