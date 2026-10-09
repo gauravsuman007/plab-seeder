@@ -165,6 +165,63 @@ class Pornolab:
             raise NotLoggedIn("session expired")
         raise LimitReached(parsing.site_message(html) or "PornoLab returned a page instead of a .torrent")
 
+    # -- registration ------------------------------------------------------- #
+    async def register_form(self) -> parsing.RegisterForm:
+        """Fetch the registration page and return the form metadata (captcha, lists)."""
+        # Step 1: agree to terms
+        r = await self._request("GET", "forum/profile.php", params={"mode": "register"})
+        html = self._text(r)
+        # POST the terms-agreement to get the actual form
+        body = "reg_agreed=1&agreed=Я+согласен"
+        r = await self._request(
+            "POST", "forum/profile.php",
+            content=body.encode("cp1251"),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
+            params={"mode": "register"},
+        )
+        html = self._text(r)
+        return parsing.parse_register_form(html)
+
+    async def register(
+        self,
+        username: str,
+        password: str,
+        email: str,
+        captcha_code: str,
+        form: parsing.RegisterForm,
+        country: str = "0",
+        timezone: str = "100",
+    ) -> dict:
+        """Submit the registration form. Returns {"ok": True} or {"error": "..."}."""
+        if not form.cap_field or not form.cap_sid:
+            raise PornolabError("registration form not initialised – fetch the form first")
+        data: dict[str, str] = {
+            "mode": "register",
+            "reg_agreed": "1",
+            "username": username,
+            "new_pass": password,
+            "cfm_pass": password,
+            "user_email": email,
+            "cap_sid": form.cap_sid,
+            form.cap_field: captcha_code,
+            "user_flag_id": country,
+            "user_timezone_x2": timezone,
+            "submit": "Зарегистрироваться",
+        }
+        body = "&".join(f"{k}={_cp1251_quote(v)}" for k, v in data.items())
+        r = await self._request(
+            "POST", "forum/profile.php",
+            content=body.encode("cp1251"),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
+        )
+        html = self._text(r)
+        if parsing.register_success(html):
+            return {"ok": True}
+        err = parsing.parse_register_error(html)
+        return {"ok": False, "error": err or "Registration failed – unknown error"}
+
     async def close(self) -> None:
         await self.client.aclose()
 

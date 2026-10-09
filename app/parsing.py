@@ -235,3 +235,47 @@ def site_message(html: str) -> str | None:
     if el := soup.select_one("table.message .mrg_16") or soup.select_one("table.message td"):
         return el.get_text(" ", strip=True)
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Registration form
+# --------------------------------------------------------------------------- #
+@dataclass
+class RegisterForm:
+    captcha_url: str | None = None
+    cap_sid: str | None = None
+    cap_field: str | None = None          # per-session "cap_code_<x>" input name
+    countries: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
+    timezones: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
+
+
+def parse_register_form(html: str) -> RegisterForm:
+    soup = BeautifulSoup(html, "html.parser")
+    form = RegisterForm()
+    if img := soup.select_one('img[src*="/captcha/"]'):
+        src = img.get("src", "")
+        form.captcha_url = "https:" + src if src.startswith("//") else src
+    if sid := soup.select_one('input[name="cap_sid"]'):
+        form.cap_sid = sid.get("value")
+    if code := soup.select_one('input[name^="cap_code_"]'):
+        form.cap_field = code.get("name")
+    if sel := soup.select_one('select[name="user_flag_id"]'):
+        form.countries = [(o.get("value", ""), o.get_text(strip=True)) for o in sel.select("option")]
+    if sel := soup.select_one('select[name="user_timezone_x2"]'):
+        form.timezones = [(o.get("value", ""), o.get_text(strip=True)) for o in sel.select("option")]
+    return form
+
+
+def parse_register_error(html: str) -> str | None:
+    """Return the site's registration error message, if any."""
+    soup = BeautifulSoup(html, "html.parser")
+    # TorrentPier shows errors in .warnColor1 or inside a message table
+    for sel in ("h4.warnColor1", "span.warnColor1", "div.warnColor1"):
+        if el := soup.select_one(sel):
+            return el.get_text(" ", strip=True)
+    return site_message(html)
+
+
+def register_success(html: str) -> bool:
+    """True if the registration success page is shown."""
+    return "Письмо с инструкцией по активации" in html or "activation" in html.lower()

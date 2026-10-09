@@ -514,6 +514,91 @@ function initHistory() {
   $("#historyRange").addEventListener("change", loadHistory);
 }
 
+// --------------------------------------------------------------- registration
+function initRegister() {
+  const getCaptchaBtn = $("#regGetCaptchaBtn");
+  const captchaBlock = $("#regCaptchaBlock");
+  const submitRow = $("#regSubmitRow");
+  const captchaImg = $("#regCaptchaImg");
+  const msg = $("#regMsg");
+
+  getCaptchaBtn.addEventListener("click", async () => {
+    getCaptchaBtn.disabled = true;
+    getCaptchaBtn.textContent = "Loading…";
+    msg.textContent = "";
+    try {
+      const res = await api("GET", "/api/register/form");
+
+      // populate country and timezone dropdowns
+      const countrySelect = $("#regCountry");
+      countrySelect.innerHTML = res.countries.map(
+        ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
+      ).join("");
+      // pre-select Russia (value 181)
+      const ru = countrySelect.querySelector('option[value="181"]');
+      if (ru) ru.selected = true;
+
+      const tzSelect = $("#regTimezone");
+      tzSelect.innerHTML = res.timezones.map(
+        ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
+      ).join("");
+      // pre-select Moscow time (GMT+3, value 6)
+      const msk = tzSelect.querySelector('option[value="6"]');
+      if (msk) msk.selected = true;
+
+      if (res.captcha) {
+        captchaImg.src = res.captcha;
+        captchaBlock.hidden = false;
+        submitRow.hidden = false;
+        captchaBlock.querySelector('input[name="captcha"]').focus();
+      } else {
+        msg.textContent = "Captcha image could not be loaded. Try again.";
+        msg.className = "form-msg err";
+      }
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "form-msg err";
+    } finally {
+      getCaptchaBtn.disabled = false;
+      getCaptchaBtn.textContent = "Refresh captcha";
+    }
+  });
+
+  $("#registerForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const payload = {
+      username: f.get("username"),
+      password: f.get("password"),
+      email: f.get("email"),
+      captcha: f.get("captcha"),
+      country: f.get("country"),
+      timezone: f.get("timezone"),
+    };
+    msg.textContent = "Submitting…";
+    msg.className = "form-msg";
+    try {
+      const res = await api("POST", "/api/register", payload);
+      if (res.ok) {
+        msg.textContent = "Registration submitted! Check your email for an activation link.";
+        msg.className = "form-msg ok";
+        captchaBlock.hidden = true;
+        submitRow.hidden = false;
+        ev.target.reset();
+        captchaBlock.querySelector('input[name="captcha"]').value = "";
+      } else {
+        msg.textContent = res.error || "Registration failed.";
+        msg.className = "form-msg err";
+        // auto-refresh the captcha after a failed attempt
+        getCaptchaBtn.click();
+      }
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "form-msg err";
+    }
+  });
+}
+
 // --------------------------------------------------------------------- poll
 let stateSeq = 0;
 async function refreshState() {
@@ -545,5 +630,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initSettings();
   initEvents();
   initHistory();
+  initRegister();
   initPoll();
 });

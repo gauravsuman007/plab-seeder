@@ -25,6 +25,7 @@
   <button class="tab" data-tab="torrents">Torrents</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="events">Events</button>
+  <button class="tab" data-tab="register">Register</button>
 </nav>
 
 <main>
@@ -254,6 +255,56 @@
         <span class="form-msg" id="settingsMsg"></span>
       </div>
     </form>
+  </section>
+
+  <!-- ============================ REGISTER ============================ -->
+  <section class="panel" id="panel-register">
+    <div class="card" style="max-width:540px">
+      <h2>Register a new PornoLab account</h2>
+      <p class="muted small">Fill in the form, then click "Get captcha" to load the verification
+         image. Enter the code and submit. An activation email will be sent to you.</p>
+
+      <form id="registerForm" class="form-grid">
+        <label>Username *
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Password * <span class="muted small">(max 20 chars)</span>
+          <input type="password" name="password" autocomplete="new-password" maxlength="20" required>
+        </label>
+        <label>Email *
+          <input type="email" name="email" autocomplete="email" required>
+        </label>
+
+        <label>Country
+          <select name="country" id="regCountry"></select>
+        </label>
+        <label>Timezone
+          <select name="timezone" id="regTimezone"></select>
+        </label>
+
+        <div class="form-actions">
+          <button type="button" class="btn" id="regGetCaptchaBtn">Get captcha</button>
+        </div>
+
+        <div id="regCaptchaBlock" hidden>
+          <img id="regCaptchaImg" alt="captcha" style="border:1px solid var(--border);border-radius:4px">
+          <label>Captcha code *
+            <input type="text" name="captcha" autocomplete="off" required>
+          </label>
+          <p class="muted small">
+            Note: PornoLab also requires a Cloudflare bot-check that can only run
+            in your browser. If registration fails with a bot-check error, open
+            <a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">
+              the site directly</a> and register there.
+          </p>
+        </div>
+
+        <div class="form-actions" id="regSubmitRow" hidden>
+          <button type="submit" class="btn primary">Register</button>
+          <span class="form-msg" id="regMsg"></span>
+        </div>
+      </form>
+    </div>
   </section>
 
   <!-- ============================ EVENTS ============================ -->

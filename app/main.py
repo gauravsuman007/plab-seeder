@@ -17,6 +17,7 @@ from .engine import Engine
 from .pornolab import PornolabError
 from .qbit import QbitError
 from .store import DB, SettingsStore
+from . import parsing as _parsing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -219,6 +220,62 @@ async def proxy_trackers(infohash: str):
         return {"ok": True, "rewritten": await engine.proxy_existing(infohash)}
     except QbitError as e:
         _fail(e, 502)
+
+
+_pending_register_form: _parsing.RegisterForm | None = None
+
+
+@app.get("/api/register/form")
+async def register_form():
+    """Fetch the PornoLab registration page and return the image captcha + lists."""
+    global _pending_register_form
+    try:
+        form = await engine.pl.register_form()
+    except PornolabError as e:
+        _fail(e, 502)
+    _pending_register_form = form
+    # fetch captcha image the same way the login flow does
+    img_data = None
+    if form.captcha_url:
+        try:
+            img = await engine.pl.client.get(
+                form.captcha_url,
+                headers={"Referer": f"{engine.pl.base}/forum/profile.php?mode=register"},
+            )
+            mime = img.headers.get("content-type", "image/png").split(";")[0]
+            if mime.startswith("image/"):
+                img_data = f"data:{mime};base64,{base64.b64encode(img.content).decode()}"
+        except Exception:
+            pass
+    return {
+        "captcha": img_data,
+        "countries": form.countries,
+        "timezones": form.timezones,
+    }
+
+
+@app.post("/api/register")
+async def register(request: Request):
+    global _pending_register_form
+    b = await _body(request)
+    if not _pending_register_form:
+        _fail(ValueError("fetch the registration form first (/api/register/form)"))
+    try:
+        result = await engine.pl.register(
+            username=b.get("username", "").strip(),
+            password=b.get("password", ""),
+            email=b.get("email", "").strip(),
+            captcha_code=b.get("captcha", ""),
+            form=_pending_register_form,
+            country=str(b.get("country", "0")),
+            timezone=str(b.get("timezone", "100")),
+        )
+    except PornolabError as e:
+        _fail(e, 502)
+    if result["ok"]:
+        _pending_register_form = None
+        db.event("Registration submitted – check your email for the activation link")
+    return result
 
 
 @app.get("/api/events")
