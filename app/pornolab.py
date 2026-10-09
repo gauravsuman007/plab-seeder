@@ -166,12 +166,70 @@ class Pornolab:
         raise LimitReached(parsing.site_message(html) or "PornoLab returned a page instead of a .torrent")
 
     # -- registration ------------------------------------------------------- #
-    async def register_form(self) -> parsing.RegisterForm:
-        """Fetch the registration page and return the form metadata (captcha, lists)."""
-        # Step 1: agree to terms
-        r = await self._request("GET", "forum/profile.php", params={"mode": "register"})
-        html = self._text(r)
-        # POST the terms-agreement to get the actual form
+    async def _flaresolverr_fetch(self, flaresolverr_url: str) -> parsing.RegisterForm:
+        """Use FlareSolverr to navigate the terms-agree flow and return the
+        registration form with a Turnstile token (if the headless browser solved it).
+
+        FlareSolverr maintains a session so the CF cookies persist across the
+        GET (terms page) and POST (agree → form page) steps.
+        """
+        base_url = flaresolverr_url.rstrip("/")
+        session_id = "pornolab-reg"
+        reg_url = f"{self.base}/forum/profile.php?mode=register"
+
+        async with httpx.AsyncClient(timeout=60) as fs:
+            # reuse an existing session if one is left from a previous attempt
+            await fs.post(f"{base_url}/v1", json={"cmd": "sessions.destroy", "session": session_id})
+            await fs.post(f"{base_url}/v1", json={"cmd": "sessions.create", "session": session_id})
+
+            # GET the terms page — this is where CF challenge runs
+            r = await fs.post(f"{base_url}/v1", json={
+                "cmd": "request.get",
+                "url": reg_url,
+                "session": session_id,
+            })
+            r.raise_for_status()
+
+            # POST the terms agreement — FlareSolverr's session carries the CF cookies
+            agree_body = "reg_agreed=1&agreed=%D0%AF+%D1%81%D0%BE%D0%B3%D0%BB%D0%B0%D1%81%D0%B5%D0%BD"
+            r = await fs.post(f"{base_url}/v1", json={
+                "cmd": "request.post",
+                "url": f"{self.base}/forum/profile.php?mode=register",
+                "postData": agree_body,
+                "session": session_id,
+            })
+            r.raise_for_status()
+            payload = r.json()
+
+        sol = payload.get("solution", {})
+        html = sol.get("response", "")
+        # Copy FlareSolverr's cookies into our httpx session so we can fetch
+        # the captcha image (and later submit the form) as the same browser
+        for c in sol.get("cookies", []):
+            self.client.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
+
+        form = parsing.parse_register_form(html)
+        if not form.turnstile_token:
+            # If FlareSolverr's headless Chrome solved the Turnstile widget,
+            # the token appears in the rendered HTML.  Log a warning but continue
+            # — the submit will still work if the server only gates on cf_clearance.
+            import logging
+            logging.getLogger("seeder").warning(
+                "FlareSolverr did not produce a Turnstile token; submission may fail"
+            )
+        return form
+
+    async def register_form(self, flaresolverr_url: str = "") -> parsing.RegisterForm:
+        """Fetch the registration page and return the form metadata (captcha, lists).
+
+        If flaresolverr_url is set, routes the terms-agree navigation through
+        FlareSolverr so the Cloudflare Turnstile is solved in a headless browser.
+        """
+        if flaresolverr_url:
+            return await self._flaresolverr_fetch(flaresolverr_url)
+
+        # Direct path (no FlareSolverr) — Turnstile token will be absent
+        await self._request("GET", "forum/profile.php", params={"mode": "register"})
         body = "reg_agreed=1&agreed=Я+согласен"
         r = await self._request(
             "POST", "forum/profile.php",
@@ -180,8 +238,7 @@ class Pornolab:
                      "Referer": f"{self.base}/forum/profile.php?mode=register"},
             params={"mode": "register"},
         )
-        html = self._text(r)
-        return parsing.parse_register_form(html)
+        return parsing.parse_register_form(self._text(r))
 
     async def register(
         self,
@@ -209,6 +266,8 @@ class Pornolab:
             "user_timezone_x2": timezone,
             "submit": "Зарегистрироваться",
         }
+        if form.turnstile_token:
+            data["cf-turnstile-response"] = form.turnstile_token
         body = "&".join(f"{k}={_cp1251_quote(v)}" for k, v in data.items())
         r = await self._request(
             "POST", "forum/profile.php",

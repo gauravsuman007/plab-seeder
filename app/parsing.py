@@ -245,6 +245,7 @@ class RegisterForm:
     captcha_url: str | None = None
     cap_sid: str | None = None
     cap_field: str | None = None          # per-session "cap_code_<x>" input name
+    turnstile_token: str | None = None    # cf-turnstile-response if FlareSolverr solved it
     countries: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
     timezones: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
 
@@ -259,6 +260,10 @@ def parse_register_form(html: str) -> RegisterForm:
         form.cap_sid = sid.get("value")
     if code := soup.select_one('input[name^="cap_code_"]'):
         form.cap_field = code.get("name")
+    if ts := soup.select_one('input[name="cf-turnstile-response"]'):
+        v = ts.get("value", "")
+        if v:
+            form.turnstile_token = v
     if sel := soup.select_one('select[name="user_flag_id"]'):
         form.countries = [(o.get("value", ""), o.get_text(strip=True)) for o in sel.select("option")]
     if sel := soup.select_one('select[name="user_timezone_x2"]'):

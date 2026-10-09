@@ -515,12 +515,71 @@ function initHistory() {
 }
 
 // --------------------------------------------------------------- registration
+const REG_NAMES = [
+  "alexey","ivan","sergey","dmitry","nikolay","pavel","mikhail","andrey","maxim",
+  "roman","artem","kirill","vitaly","evgeny","igor","oleg","denis","vladislav",
+  "anna","natasha","elena","olga","katya","marina","svetlana","irina","alina",
+  "daria","oksana","tatyana","vitalik","sanya","kostya","dima","nikita","ruslan",
+];
+const REG_SUFFIXES = ["_pro","_ru","_online","_net","_top","_vip","_ok","_kz","_ua"];
+
+function regRandomUsername() {
+  const name = REG_NAMES[Math.floor(Math.random() * REG_NAMES.length)];
+  const r = Math.random();
+  if (r < 0.4) {
+    // name + birth year 1978-2003
+    return name + (1978 + Math.floor(Math.random() * 26));
+  } else if (r < 0.65) {
+    // name + 2-digit number
+    return name + String(Math.floor(Math.random() * 90) + 10);
+  } else if (r < 0.8) {
+    // name + suffix
+    return name + REG_SUFFIXES[Math.floor(Math.random() * REG_SUFFIXES.length)];
+  } else {
+    // name + _ + another name fragment
+    const name2 = REG_NAMES[Math.floor(Math.random() * REG_NAMES.length)];
+    return name + "_" + name2.slice(0, 3 + Math.floor(Math.random() * 3));
+  }
+}
+
+function regRandomPassword() {
+  // 16-char password: letters + digits + symbols, max 20 chars (site limit)
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghjkmnpqrstuvwxyz";
+  const digits = "23456789";
+  const syms = "!@#$%&*";
+  const pool = upper + lower + digits + syms;
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  // guarantee at least one of each class
+  let pw = [
+    upper[arr[0] % upper.length],
+    lower[arr[1] % lower.length],
+    digits[arr[2] % digits.length],
+    syms[arr[3] % syms.length],
+    ...Array.from(arr.slice(4), b => pool[b % pool.length]),
+  ];
+  // Fisher-Yates shuffle
+  for (let i = pw.length - 1; i > 0; i--) {
+    const j = arr[i % arr.length] % (i + 1);
+    [pw[i], pw[j]] = [pw[j], pw[i]];
+  }
+  return pw.join("");
+}
+
 function initRegister() {
   const getCaptchaBtn = $("#regGetCaptchaBtn");
   const captchaBlock = $("#regCaptchaBlock");
   const submitRow = $("#regSubmitRow");
   const captchaImg = $("#regCaptchaImg");
   const msg = $("#regMsg");
+  const turnstileNote = $("#regTurnstileNote");
+
+  $("#regRandomBtn").addEventListener("click", () => {
+    const form = $("#registerForm");
+    form.elements["username"].value = regRandomUsername();
+    form.elements["password"].value = regRandomPassword();
+  });
 
   getCaptchaBtn.addEventListener("click", async () => {
     getCaptchaBtn.disabled = true;
@@ -529,12 +588,10 @@ function initRegister() {
     try {
       const res = await api("GET", "/api/register/form");
 
-      // populate country and timezone dropdowns
       const countrySelect = $("#regCountry");
       countrySelect.innerHTML = res.countries.map(
         ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
       ).join("");
-      // pre-select Russia (value 181)
       const ru = countrySelect.querySelector('option[value="181"]');
       if (ru) ru.selected = true;
 
@@ -542,9 +599,18 @@ function initRegister() {
       tzSelect.innerHTML = res.timezones.map(
         ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
       ).join("");
-      // pre-select Moscow time (GMT+3, value 6)
       const msk = tzSelect.querySelector('option[value="6"]');
       if (msk) msk.selected = true;
+
+      if (res.turnstile_solved) {
+        turnstileNote.textContent = "✓ Cloudflare bot-check solved by FlareSolverr.";
+        turnstileNote.className = "muted small ok";
+      } else {
+        turnstileNote.innerHTML =
+          'Cloudflare bot-check not solved. If registration fails, configure FlareSolverr in Settings ' +
+          'or <a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">register directly on the site</a>.';
+        turnstileNote.className = "muted small";
+      }
 
       if (res.captcha) {
         captchaImg.src = res.captcha;
@@ -585,12 +651,10 @@ function initRegister() {
         captchaBlock.hidden = true;
         submitRow.hidden = false;
         ev.target.reset();
-        captchaBlock.querySelector('input[name="captcha"]').value = "";
       } else {
         msg.textContent = res.error || "Registration failed.";
         msg.className = "form-msg err";
-        // auto-refresh the captcha after a failed attempt
-        getCaptchaBtn.click();
+        getCaptchaBtn.click();   // auto-refresh captcha on failure
       }
     } catch (e) {
       msg.textContent = e.message;

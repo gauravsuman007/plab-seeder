@@ -197,8 +197,12 @@
           <h2>PornoLab</h2>
           <div class="form-grid">
             <label>Site URL <input type="text" name="pornolab_url"></label>
+            <label>FlareSolverr URL
+              <input type="text" name="flaresolverr_url" placeholder="http://flaresolverr:8191">
+            </label>
           </div>
-          <p class="muted small">Account credentials are set from the Dashboard's login card, not here.</p>
+          <p class="muted small">Account credentials are set from the Dashboard's login card, not here.
+            FlareSolverr is used during account registration to solve the Cloudflare bot-check.</p>
         </div>
 
         <div class="card">
@@ -266,7 +270,10 @@
 
       <form id="registerForm" class="form-grid">
         <label>Username *
-          <input type="text" name="username" autocomplete="username" required>
+          <div style="display:flex;gap:.5rem">
+            <input type="text" name="username" autocomplete="username" required style="flex:1">
+            <button type="button" class="btn small" id="regRandomBtn" title="Generate random username &amp; password">Random</button>
+          </div>
         </label>
         <label>Password * <span class="muted small">(max 20 chars)</span>
           <input type="password" name="password" autocomplete="new-password" maxlength="20" required>
@@ -291,12 +298,7 @@
           <label>Captcha code *
             <input type="text" name="captcha" autocomplete="off" required>
           </label>
-          <p class="muted small">
-            Note: PornoLab also requires a Cloudflare bot-check that can only run
-            in your browser. If registration fails with a bot-check error, open
-            <a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">
-              the site directly</a> and register there.
-          </p>
+          <p class="muted small" id="regTurnstileNote"></p>
         </div>
 
         <div class="form-actions" id="regSubmitRow" hidden>
