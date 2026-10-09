@@ -191,79 +191,58 @@ class Pornolab:
         raise LimitReached(parsing.site_message(html) or "PornoLab returned a page instead of a .torrent")
 
     # -- registration ------------------------------------------------------- #
-    async def _flaresolverr_fetch(self, flaresolverr_url: str) -> parsing.RegisterForm:
-        """Use FlareSolverr to navigate the terms-agree flow and return the
-        registration form with a Turnstile token (if the headless browser solved it).
+    async def _playwright_register(self) -> tuple[str, list[dict]]:
+        """Drive a real headless Chromium through the terms-agree step so Cloudflare
+        Turnstile actually gets to run.
 
-        FlareSolverr maintains a session so the CF cookies persist across the
-        GET (terms page) and POST (agree → form page) steps.
+        FlareSolverr only waits/solves when it recognises Cloudflare's own full-page
+        challenge wrapper ("Just a moment..."). The registration form is a normal 200
+        TorrentPier page that just happens to embed a Turnstile widget, so FlareSolverr
+        logs "Challenge not detected!" and returns before the widget's async JS has a
+        chance to populate the cf-turnstile-response hidden input. A real browser with
+        an actual wait loop is needed instead.
         """
-        base_url = flaresolverr_url.rstrip("/")
-        session_id = "pornolab-reg"
+        from playwright.async_api import async_playwright
+
         reg_url = f"{self.base}/forum/profile.php?mode=register"
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox"])
+            page = await browser.new_page(user_agent=UA)
+            try:
+                await page.goto(reg_url, wait_until="networkidle")
+                # the "I agree" link submits a hidden form (id="go-to-reg") via jQuery;
+                # match on the onclick handler rather than the (Russian) link text
+                await page.click('a[onclick*="go-to-reg"]')
+                await page.wait_for_load_state("networkidle")
+                # Turnstile resolves asynchronously after the form page loads — poll
+                # the hidden input it fills in rather than trusting the first snapshot
+                for _ in range(20):
+                    value = await page.eval_on_selector(
+                        'input[name="cf-turnstile-response"]', "el => el.value"
+                    )
+                    if value:
+                        break
+                    await page.wait_for_timeout(1000)
+                html = await page.content()
+                cookies = await page.context.cookies()
+            finally:
+                await browser.close()
+        return html, cookies
 
-        async with httpx.AsyncClient(timeout=60) as fs:
-            # reuse an existing session if one is left from a previous attempt
-            await fs.post(f"{base_url}/v1", json={"cmd": "sessions.destroy", "session": session_id})
-            await fs.post(f"{base_url}/v1", json={"cmd": "sessions.create", "session": session_id})
-
-            # GET the terms page — this is where CF challenge runs
-            r = await fs.post(f"{base_url}/v1", json={
-                "cmd": "request.get",
-                "url": reg_url,
-                "session": session_id,
-            })
-            r.raise_for_status()
-
-            # POST the terms agreement — FlareSolverr's session carries the CF cookies
-            agree_body = "reg_agreed=1&agreed=%D0%AF+%D1%81%D0%BE%D0%B3%D0%BB%D0%B0%D1%81%D0%B5%D0%BD"
-            r = await fs.post(f"{base_url}/v1", json={
-                "cmd": "request.post",
-                "url": f"{self.base}/forum/profile.php?mode=register",
-                "postData": agree_body,
-                "session": session_id,
-            })
-            r.raise_for_status()
-            payload = r.json()
-
-        sol = payload.get("solution", {})
-        html = sol.get("response", "")
-        # Copy FlareSolverr's cookies into our httpx session so we can fetch
-        # the captcha image (and later submit the form) as the same browser
-        for c in sol.get("cookies", []):
-            self.client.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
-
+    async def register_form(self) -> parsing.RegisterForm:
+        """Fetch the registration page and return the form metadata (captcha, lists,
+        Turnstile token) via a real headless browser — see _playwright_register.
+        """
+        html, cookies = await self._playwright_register()
+        for c in cookies:
+            self.client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
         form = parsing.parse_register_form(html)
         if not form.turnstile_token:
-            # If FlareSolverr's headless Chrome solved the Turnstile widget,
-            # the token appears in the rendered HTML.  Log a warning but continue
-            # — the submit will still work if the server only gates on cf_clearance.
             import logging
             logging.getLogger("seeder").warning(
-                "FlareSolverr did not produce a Turnstile token; submission may fail"
+                "headless browser did not produce a Turnstile token; submission may fail"
             )
         return form
-
-    async def register_form(self, flaresolverr_url: str = "") -> parsing.RegisterForm:
-        """Fetch the registration page and return the form metadata (captcha, lists).
-
-        If flaresolverr_url is set, routes the terms-agree navigation through
-        FlareSolverr so the Cloudflare Turnstile is solved in a headless browser.
-        """
-        if flaresolverr_url:
-            return await self._flaresolverr_fetch(flaresolverr_url)
-
-        # Direct path (no FlareSolverr) — Turnstile token will be absent
-        await self._request("GET", "forum/profile.php", params={"mode": "register"})
-        body = "reg_agreed=1&agreed=Я+согласен"
-        r = await self._request(
-            "POST", "forum/profile.php",
-            content=body.encode("cp1251"),
-            headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
-            params={"mode": "register"},
-        )
-        return parsing.parse_register_form(self._text(r))
 
     async def register(
         self,

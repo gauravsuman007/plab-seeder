@@ -29,7 +29,6 @@ class Settings:
     pornolab_url: str = "https://pornolab.net"
     pornolab_username: str = ""
     pornolab_password: str = ""                     # kept only if "remember" was ticked
-    flaresolverr_url: str = ""                      # e.g. http://flaresolverr:8191
 
     # Automation
     auto: bool = False                              # off until the user turns it on

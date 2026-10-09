@@ -230,7 +230,7 @@ async def register_form():
     """Fetch the PornoLab registration page and return the image captcha + lists."""
     global _pending_register_form
     try:
-        form = await engine.pl.register_form(flaresolverr_url=store.settings.flaresolverr_url)
+        form = await engine.pl.register_form()
     except PornolabError as e:
         _fail(e, 502)
     _pending_register_form = form

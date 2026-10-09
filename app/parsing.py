@@ -245,7 +245,7 @@ class RegisterForm:
     captcha_url: str | None = None
     cap_sid: str | None = None
     cap_field: str | None = None          # per-session "cap_code_<x>" input name
-    turnstile_token: str | None = None    # cf-turnstile-response if FlareSolverr solved it
+    turnstile_token: str | None = None    # cf-turnstile-response, filled by the headless browser
     countries: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
     timezones: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
 

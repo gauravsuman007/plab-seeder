@@ -603,12 +603,12 @@ function initRegister() {
       if (msk) msk.selected = true;
 
       if (res.turnstile_solved) {
-        turnstileNote.textContent = "✓ Cloudflare bot-check solved by FlareSolverr.";
+        turnstileNote.textContent = "✓ Cloudflare bot-check solved.";
         turnstileNote.className = "muted small ok";
       } else {
         turnstileNote.innerHTML =
-          'Cloudflare bot-check not solved. If registration fails, configure FlareSolverr in Settings ' +
-          'or <a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">register directly on the site</a>.';
+          'Cloudflare bot-check not solved. If registration fails, ' +
+          '<a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">register directly on the site</a>.';
         turnstileNote.className = "muted small";
       }
 
