@@ -19,6 +19,31 @@ UA = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
 MIN_GAP = 3.0
 COOKIES = DATA_DIR / "pornolab_cookies.json"
 
+_ocr = None
+
+
+def _solve_captcha(img_bytes: bytes) -> str:
+    """Solve a TorrentPier image captcha using ddddocr.
+
+    The captcha has a 'pornolab.net' watermark strip at the bottom ~28% of the
+    image that confuses the model, so we crop it before classifying.
+    """
+    global _ocr
+    if _ocr is None:
+        import ddddocr as _ddddocr
+        _ocr = _ddddocr.DdddOcr(show_ad=False)
+    from PIL import Image, ImageEnhance
+    import io
+    img = Image.open(io.BytesIO(img_bytes))
+    w, h = img.size
+    cropped = img.crop((0, 0, w, int(h * 0.72)))
+    cropped = cropped.resize((w * 2, int(h * 0.72) * 2), Image.LANCZOS)
+    cropped = cropped.convert("L")
+    cropped = ImageEnhance.Contrast(cropped).enhance(3)
+    buf = io.BytesIO()
+    cropped.save(buf, format="PNG")
+    return _ocr.classification(buf.getvalue())
+
 
 class PornolabError(Exception):
     pass

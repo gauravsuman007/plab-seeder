@@ -616,7 +616,16 @@ function initRegister() {
         captchaImg.src = res.captcha;
         captchaBlock.hidden = false;
         submitRow.hidden = false;
-        captchaBlock.querySelector('input[name="captcha"]').focus();
+        const captchaInput = captchaBlock.querySelector('input[name="captcha"]');
+        if (res.captcha_text) {
+          captchaInput.value = res.captcha_text;
+          captchaInput.style.color = "var(--muted)";
+          captchaInput.title = "Auto-solved by OCR — edit if incorrect";
+        } else {
+          captchaInput.value = "";
+          captchaInput.style.color = "";
+          captchaInput.focus();
+        }
       } else {
         msg.textContent = "Captcha image could not be loaded. Try again.";
         msg.className = "form-msg err";

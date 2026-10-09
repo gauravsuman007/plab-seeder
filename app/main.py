@@ -236,6 +236,7 @@ async def register_form():
     _pending_register_form = form
     # fetch captcha image the same way the login flow does
     img_data = None
+    captcha_text = None
     if form.captcha_url:
         try:
             img = await engine.pl.client.get(
@@ -245,10 +246,15 @@ async def register_form():
             mime = img.headers.get("content-type", "image/png").split(";")[0]
             if mime.startswith("image/"):
                 img_data = f"data:{mime};base64,{base64.b64encode(img.content).decode()}"
+                try:
+                    captcha_text = engine.pl._solve_captcha(img.content)
+                except Exception as e:
+                    logging.getLogger("seeder").warning("captcha OCR failed: %s", e)
         except Exception:
             pass
     return {
         "captcha": img_data,
+        "captcha_text": captcha_text,
         "countries": form.countries,
         "timezones": form.timezones,
         "turnstile_solved": bool(form.turnstile_token),
