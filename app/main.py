@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .engine import Engine
-from .pornolab import PornolabError
+from .pornolab import PornolabError, _solve_captcha as _ocr_solve
 from .qbit import QbitError
 from .store import DB, SettingsStore
 from . import parsing as _parsing
@@ -247,7 +247,7 @@ async def register_form():
             if mime.startswith("image/"):
                 img_data = f"data:{mime};base64,{base64.b64encode(img.content).decode()}"
                 try:
-                    captcha_text = engine.pl._solve_captcha(img.content)
+                    captcha_text = _ocr_solve(img.content)
                 except Exception as e:
                     logging.getLogger("seeder").warning("captcha OCR failed: %s", e)
         except Exception:
