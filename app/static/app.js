@@ -673,6 +673,33 @@ function initRegister() {
 }
 
 
+// ----------------------------------------------------------- mail.ru factory
+function initMailRu() {
+  const btn      = $("#regMailruBtn");
+  const statusEl = $("#regMailruStatus");
+  const emailInput = $("#registerForm").elements["email"];
+  const passInput  = $("#registerForm").elements["password"];
+
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = "Creating mail.ru account (phone verification may take ~60s)…";
+    try {
+      const res = await api("POST", "/api/mailru/create", {});
+      emailInput.value = res.email;
+      passInput.value  = res.password;
+      emailInput.dispatchEvent(new Event("input"));
+      statusEl.textContent = `✓ Created ${res.email}`;
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 // --------------------------------------------------------------------- poll
 let stateSeq = 0;
 async function refreshState() {
@@ -705,5 +732,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initEvents();
   initHistory();
   initRegister();
+  initMailRu();
   initPoll();
 });

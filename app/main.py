@@ -19,6 +19,7 @@ from .qbit import QbitError
 from .store import DB, SettingsStore
 from . import parsing as _parsing
 from . import temp_email as _te
+from . import mail_ru as _mru
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -352,6 +353,29 @@ async def tempemail_message(msg_id: str):
         "body_text": m.body_text,
         "body_html": m.body_html,
     }
+
+
+@app.post("/api/mailru/create")
+async def mailru_create():
+    """Create a fresh mail.ru account using sms-activate.org for phone verification.
+
+    Requires sms_activate_api_key in settings. Returns the new email address and
+    password, and stores them in _active_mailru so subsequent registration calls
+    can pre-fill the email field.
+    """
+    key = store.settings.sms_activate_api_key
+    if not key:
+        _fail(ValueError("sms_activate_api_key not set in settings"))
+    domain = store.settings.mailru_domain or "mail.ru"
+    factory = _mru.MailRuFactory(sms_api_key=key, domain=domain)
+    try:
+        email, password = await factory.create()
+    except _mru.MailRuError as e:
+        _fail(e, 502)
+    except _mru.SmsActivateError as e:
+        _fail(e, 502)
+    db.event(f"mail.ru account created: {email}")
+    return {"ok": True, "email": email, "password": password}
 
 
 @app.get("/api/events")

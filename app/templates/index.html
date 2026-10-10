@@ -202,6 +202,27 @@
         </div>
 
         <div class="card">
+          <h2>mail.ru account factory</h2>
+          <p class="muted small">Needed for the "New mail.ru" button on the Register tab.
+             Get a key at <a href="https://sms-activate.org" target="_blank" rel="noopener">sms-activate.org</a>
+             (~$0.10 per number).</p>
+          <div class="form-grid">
+            <label>sms-activate.org API key
+              <input type="password" name="sms_activate_api_key" autocomplete="new-password"
+                     placeholder="•••••••• (unchanged)">
+            </label>
+            <label>Domain
+              <select name="mailru_domain">
+                <option value="mail.ru">mail.ru</option>
+                <option value="bk.ru">bk.ru</option>
+                <option value="inbox.ru">inbox.ru</option>
+                <option value="list.ru">list.ru</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
           <h2>Automation</h2>
           <div class="form-grid">
             <label>Daily .torrent budget <input type="number" name="daily_torrent_budget" min="0"></label>
@@ -264,7 +285,8 @@
       <p class="muted small">Fill in the form, then click "Get captcha" to load the verification
          image. Enter the code and submit. An activation email will be sent to the address you provide.</p>
       <p class="muted small" style="color:var(--warn,#b45309)">⚠ PornoLab blocks all disposable/temporary email services.
-         Use a real address (Gmail, Protonmail, etc.) — you will need to click the activation link.</p>
+         Use a real address, or click <strong>New mail.ru</strong> to auto-create one
+         (requires sms-activate.org key in Settings).</p>
 
       <form id="registerForm" class="form-grid">
         <label>Username *
@@ -277,7 +299,11 @@
           <input type="password" name="password" autocomplete="new-password" maxlength="20" required>
         </label>
         <label>Email *
-          <input type="email" name="email" autocomplete="email" required>
+          <div style="display:flex;gap:.5rem;align-items:flex-start;flex-wrap:wrap">
+            <input type="email" name="email" autocomplete="email" required style="flex:1;min-width:180px">
+            <button type="button" class="btn small" id="regMailruBtn" title="Auto-create a mail.ru account via sms-activate.org">New mail.ru</button>
+          </div>
+          <div id="regMailruStatus" class="muted small" hidden></div>
         </label>
 
         <label>Country

@@ -46,6 +46,10 @@ class Settings:
     max_size_mb: int = 4096
     exclude_forums: list[int] = field(default_factory=list)
 
+    # mail.ru account factory
+    sms_activate_api_key: str = ""          # sms-activate.org API key for phone verification
+    mailru_domain: str = "mail.ru"          # @mail.ru | @bk.ru | @inbox.ru | @list.ru
+
     # The download guard
     allow_crossing: bool = False                    # never cross 2 GB unless this is on
     ratio_target: float = 0.6
@@ -60,7 +64,7 @@ class Settings:
     disk_budget_gb: int = 50
 
 
-SECRET_FIELDS = {"qbit_password", "pornolab_password"}
+SECRET_FIELDS = {"qbit_password", "pornolab_password", "sms_activate_api_key"}
 
 
 class SettingsStore:
