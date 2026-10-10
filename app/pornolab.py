@@ -399,10 +399,13 @@ class Pornolab:
         """Fetch the registration page and return the form metadata (captcha, lists,
         Turnstile token) via a real headless browser — see _playwright_register.
         """
-        html, cookies = await self._playwright_register()
-        for c in cookies:
-            self.client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
+        html, reg_cookies = await self._playwright_register()
+        # Keep the browser cookies separate from the owner's session: the
+        # register POST must go out as an anonymous request, not as the
+        # logged-in owner. Store them on the form object so register() can
+        # use them without touching self.client.
         form = parsing.parse_register_form(html)
+        form.browser_cookies = reg_cookies          # stash for register()
         if not form.turnstile_token:
             import logging
             logging.getLogger("seeder").warning(
@@ -439,12 +442,22 @@ class Pornolab:
         if form.turnstile_token:
             data["cf-turnstile-response"] = form.turnstile_token
         body = "&".join(f"{k}={_cp1251_quote(v)}" for k, v in data.items())
-        r = await self._request(
-            "POST", "forum/profile.php",
-            content=body.encode("cp1251"),
-            headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
+        # Use a fresh cookieless client so the owner's session cookies are NOT
+        # sent — the tracker redirects to the homepage for already-logged-in users.
+        reg_client = httpx.AsyncClient(
+            headers={"User-Agent": UA, "Accept-Language": "ru,en;q=0.8"},
+            timeout=30,
+            follow_redirects=True,
         )
+        for c in getattr(form, "browser_cookies", []):
+            reg_client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
+        async with reg_client:
+            r = await reg_client.post(
+                f"{self.base}/forum/profile.php",
+                content=body.encode("cp1251"),
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "Referer": f"{self.base}/forum/profile.php?mode=register"},
+            )
         html = self._text(r)
         if parsing.register_success(html):
             return {"ok": True}

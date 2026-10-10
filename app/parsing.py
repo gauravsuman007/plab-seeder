@@ -248,6 +248,9 @@ class RegisterForm:
     turnstile_token: str | None = None    # cf-turnstile-response, filled by the headless browser
     countries: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
     timezones: list[tuple[str, str]] = field(default_factory=list)   # (value, label)
+    # Cookies from the browser session that fetched the form — kept separate
+    # from the owner's session so the register POST goes out as anonymous.
+    browser_cookies: list[dict] = field(default_factory=list)
 
 
 def parse_register_form(html: str) -> RegisterForm:
