@@ -1,0 +1,32 @@
+# Example overlay for the seeder deployment: drops this file beside the main
+# docker-compose.yml and runs `docker compose up -d`. Docker Compose auto-
+# loads override.yml, so the two services come up together and the seeder
+# gets TURNSTILE_SIDECAR_URL pointing at the sidecar's internal hostname.
+#
+# On the running pornolab-seeder deployment (192.168.2.100), this file is
+# installed as /home/hellonfire/Server/pornolab-seeder/docker-compose.override.yml.
+#
+# Build the sidecar image first (from the seeder repo root):
+#   docker build -t pornolab-turnstile-solver sidecar/turnstile-solver
+services:
+  pornolab-seeder:
+    environment:
+      TURNSTILE_SIDECAR_URL: http://turnstile-solver:8000
+
+  turnstile-solver:
+    image: pornolab-turnstile-solver:latest
+    container_name: turnstile-solver
+    restart: unless-stopped
+    networks:
+      # Share the IPv6-enabled network with the seeder -- Cloudflare's
+      # per-challenge subdomain is IPv6-only.
+      - ipv6
+    ports:
+      # Optional: expose for direct curl testing. Remove for production.
+      - "8193:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3

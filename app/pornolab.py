@@ -202,20 +202,30 @@ class Pornolab:
     # arm64-native) clears the same widget in ~1 s. See
     # archive/turnstile-attempts/ for everything we ruled out.
     #
-    # Order:
-    #   1. camoufox + click                   (primary; ~15 s cold, 1-2 s solve)
-    #   2. patchright headful under Xvfb      (fallback if camoufox breaks)
+    # Order (first that returns a token wins):
+    #   1. sidecar HTTP call                  (if TURNSTILE_SIDECAR_URL is set;
+    #                                          our own camoufox packaged as a
+    #                                          separate container, see
+    #                                          sidecar/turnstile-solver/)
+    #   2. in-process camoufox + click        (~15 s cold, 1-2 s solve)
+    #   3. patchright headful under Xvfb      (safety-net; does NOT clear the
+    #                                          current ruleset on arm64, kept
+    #                                          in case the above two break)
     #
     # The caller only ever gets the HTML + cookies of a successful attempt. We
     # stop as soon as `cf-turnstile-response` is populated, so a stage that
     # works short-circuits every heavier one.
     async def _playwright_register(self) -> tuple[str, list[dict]]:
-        import logging
+        import logging, os
         log = logging.getLogger("seeder")
 
+        stages: list = []
+        if os.environ.get("TURNSTILE_SIDECAR_URL"):
+            stages.append(self._register_stage_sidecar)
+        stages += [self._register_stage_camoufox, self._register_stage_xvfb]
+
         last_err: Exception | None = None
-        for stage in (self._register_stage_camoufox,
-                      self._register_stage_xvfb):
+        for stage in stages:
             name = stage.__name__.removeprefix("_register_stage_")
             try:
                 log.info("Turnstile: trying stage %s", name)
@@ -343,6 +353,33 @@ class Pornolab:
             return html, cookies, token
         finally:
             await close_target.close()
+
+    async def _register_stage_sidecar(self):
+        """Call the camoufox-based turnstile-solver sidecar over HTTP.
+
+        Scheduled when TURNSTILE_SIDECAR_URL points at the sidecar container
+        (see sidecar/turnstile-solver/). Keeping the Firefox install out of
+        the seeder's own image saves ~1.5 GB and lets the sidecar be reused
+        and scaled independently.
+        """
+        import os
+        base = os.environ["TURNSTILE_SIDECAR_URL"].rstrip("/")
+        payload = {
+            "url": f"{self.base}/forum/profile.php?mode=register",
+            "agree_click": 'a[onclick*="go-to-reg"]',
+            "widget_selector": ".cf-turnstile",
+            "max_timeout": 90,
+        }
+        # Separate client: the sidecar is local and should NOT inherit the
+        # tracker-session cookies or UA; it mints a fresh browser profile.
+        async with httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(f"{base}/solve", json=payload)
+            r.raise_for_status()
+            d = r.json()
+        token = d.get("token", "")
+        html = d.get("html", "")
+        cookies = d.get("cookies", [])
+        return html, cookies, token
 
     async def _register_stage_camoufox(self):
         """Primary: camoufox (patched Firefox, arm64-native) + a click on the
