@@ -15,6 +15,7 @@ services:
       - "${SEEDER_PORT:-8010}:8000"
     networks:
       - vpngate
+      - ipv6
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
@@ -29,3 +30,9 @@ networks:
   vpngate:
     name: vpngate-torrent_default
     external: true
+  # Cloudflare Turnstile's per-challenge subdomain (challenges.cloudflare.com)
+  # is served IPv6-only. The default bridge has no IPv6 route, so the
+  # registration browser can't resolve/reach it and the widget never solves.
+  # This network is unrelated to vpngate-torrent — only the seeder uses it.
+  ipv6:
+    enable_ipv6: true
