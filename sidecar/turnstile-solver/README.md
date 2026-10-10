@@ -38,19 +38,25 @@ Response:
 The caller does the subsequent form submit; this sidecar only extracts the
 token.
 
-## Build
+## Image
 
-From the repo root:
+Published to GHCR via CI (linux/amd64 + linux/arm64):
 
 ```bash
-docker build -t pornolab-turnstile-solver sidecar/turnstile-solver
+docker pull ghcr.io/gauravsuman007/camoufox-turnstile-solver:latest
+```
+
+Or build locally from the repo root:
+
+```bash
+docker build -t camoufox-turnstile-solver sidecar/turnstile-solver
 ```
 
 ## Run
 
 ```bash
 docker run -d --name turnstile-solver --restart unless-stopped \
-  -p 8193:8000 pornolab-turnstile-solver
+  -p 8193:8000 ghcr.io/gauravsuman007/camoufox-turnstile-solver:latest
 ```
 
 Health check: `curl http://localhost:8193/healthz` -> `{"status":"ok"}`.

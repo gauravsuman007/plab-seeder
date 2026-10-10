@@ -14,7 +14,7 @@ services:
       TURNSTILE_SIDECAR_URL: http://turnstile-solver:8000
 
   turnstile-solver:
-    image: pornolab-turnstile-solver:latest
+    image: ghcr.io/gauravsuman007/camoufox-turnstile-solver:latest
     container_name: turnstile-solver
     restart: unless-stopped
     networks:
