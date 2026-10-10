@@ -449,7 +449,10 @@ class Pornolab:
         if parsing.register_success(html):
             return {"ok": True}
         err = parsing.parse_register_error(html)
-        return {"ok": False, "error": err or "Registration failed – unknown error"}
+        # Always include a snippet of the raw page so the UI can show the
+        # tracker's actual message even when the parser misses it.
+        return {"ok": False, "error": err or "Registration failed – unknown error",
+                "raw_html": html}
 
     async def close(self) -> None:
         await self.client.aclose()
