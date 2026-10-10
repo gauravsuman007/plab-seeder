@@ -428,7 +428,6 @@ class Pornolab:
             raise PornolabError("registration form not initialised – fetch the form first")
         data: dict[str, str] = {
             "mode": "register",
-            "reg_agreed": "1",
             "username": username,
             "new_pass": password,
             "cfm_pass": password,
