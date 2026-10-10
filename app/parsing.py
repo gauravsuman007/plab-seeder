@@ -277,20 +277,20 @@ def parse_register_form(html: str) -> RegisterForm:
 def parse_register_error(html: str) -> str | None:
     """Return the site's registration error message, if any."""
     soup = BeautifulSoup(html, "html.parser")
-    # TorrentPier shows errors in any .warnColor1 element (tag varies by version)
-    for sel in ("h4.warnColor1", "span.warnColor1", "div.warnColor1",
-                "p.warnColor1", ".warnColor1"):
+    # div.msg is used for field-level validation errors (e.g. "wrong captcha").
+    if el := soup.select_one("div.msg"):
+        return el.get_text(" ", strip=True)
+    # .warnColor1 can carry errors, but skip legend elements — they are TOS
+    # section headers on the registration form, not error indicators.
+    for sel in ("h4.warnColor1", "span.warnColor1", "div.warnColor1", "p.warnColor1"):
         if el := soup.select_one(sel):
             return el.get_text(" ", strip=True)
-    # Also check the generic site message (used for "captcha wrong" etc.)
+    for el in soup.select(".warnColor1"):
+        if el.name != "legend":
+            return el.get_text(" ", strip=True)
+    # Generic site message box (download-limit page, etc.)
     if msg := site_message(html):
         return msg
-    # Last resort: first non-empty paragraph inside a table cell that looks
-    # like a TorrentPier form-error cell.
-    for td in soup.select("td.nav, td.forumline"):
-        text = td.get_text(" ", strip=True)
-        if text and len(text) < 300:
-            return text
     return None
 
 

@@ -359,6 +359,13 @@ class Pornolab:
         (see sidecar/turnstile-solver/). Keeping the Firefox install out of
         the seeder's own image saves ~1.5 GB and lets the sidecar be reused
         and scaled independently.
+
+        The agree POST is done via sidecar pre_post (inside the browser session)
+        so that the server-side TOS-agreed flag is set before we navigate to the
+        registration form. Using httpx for the agree step fails because the
+        anonymous plm cookie has a constant value ("1") that doesn't uniquely
+        identify the session, so the server-side agreement state can't be read
+        back by a different process.
         """
         import os
         base = os.environ["TURNSTILE_SIDECAR_URL"].rstrip("/")
@@ -407,6 +414,12 @@ class Pornolab:
         log = logging.getLogger("seeder")
 
         _html, reg_cookies = await self._playwright_register()
+        # Dump browser HTML to /tmp so we can inspect hidden form fields during debugging.
+        try:
+            with open("/tmp/register_form_debug.html", "w", encoding="utf-8", errors="replace") as f:
+                f.write(_html)
+        except Exception:
+            pass
         form = parsing.parse_register_form(_html)
         if not form.turnstile_token:
             log.warning("headless browser did not produce a Turnstile token; submission may fail")
@@ -446,7 +459,13 @@ class Pornolab:
         }
         if form.turnstile_token:
             data["cf-turnstile-response"] = form.turnstile_token
-        body = "&".join(f"{k}={_cp1251_quote(v)}" for k, v in data.items())
+        # The form uses enctype="multipart/form-data"; send as multipart so
+        # the server processes each field correctly. Text values are encoded
+        # in the site's own charset (windows-1251).
+        multipart_files = {
+            k: (None, v.encode("cp1251"), "text/plain; charset=windows-1251")
+            for k, v in data.items()
+        }
         # Use a fresh cookieless client so the owner's session cookies are NOT
         # sent — the tracker redirects to the homepage for already-logged-in users.
         reg_client = httpx.AsyncClient(
@@ -459,9 +478,8 @@ class Pornolab:
         async with reg_client:
             r = await reg_client.post(
                 f"{self.base}/forum/profile.php",
-                content=body.encode("cp1251"),
-                headers={"Content-Type": "application/x-www-form-urlencoded",
-                         "Referer": f"{self.base}/forum/profile.php?mode=register"},
+                files=multipart_files,
+                headers={"Referer": f"{self.base}/forum/profile.php?mode=register"},
             )
         html = self._text(r)
         if parsing.register_success(html):

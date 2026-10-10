@@ -264,6 +264,10 @@ async def register_form():
         "countries": form.countries,
         "timezones": form.timezones,
         "turnstile_solved": bool(form.turnstile_token),
+        "_debug_cap_sid": form.cap_sid,
+        "_debug_cap_field": form.cap_field,
+        "_debug_captcha_url": form.captcha_url,
+        "_debug_browser_cookie_names": [c["name"] for c in form.browser_cookies],
     }
 
 
