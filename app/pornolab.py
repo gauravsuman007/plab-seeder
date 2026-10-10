@@ -23,26 +23,64 @@ _ocr = None
 
 
 def _solve_captcha(img_bytes: bytes) -> str:
-    """Solve a TorrentPier image captcha using ddddocr.
+    """Solve a TorrentPier image captcha.
 
-    The captcha has a 'pornolab.net' watermark strip at the bottom ~28% of the
-    image that confuses the model, so we crop it before classifying.
+    Uses Claude's vision API when ANTHROPIC_API_KEY is set (more accurate).
+    Falls back to ddddocr with both standard and beta models.
     """
+    import os
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        return _solve_captcha_claude(img_bytes, api_key)
+    return _solve_captcha_ocr(img_bytes)
+
+
+def _solve_captcha_claude(img_bytes: bytes, api_key: str) -> str:
+    """Use Claude's vision API to read the captcha text."""
+    import base64 as _b64
+    import urllib.request, urllib.error, json as _json
+    img_b64 = _b64.b64encode(img_bytes).decode()
+    body = _json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 20,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
+                {"type": "text", "text": "Output ONLY the alphanumeric characters shown in this captcha image, nothing else. Ignore the 'pornolab.net' watermark at the bottom."},
+            ],
+        }],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = _json.loads(resp.read())
+            text = result["content"][0]["text"].strip().lower()
+            # keep only alphanumeric
+            import re
+            return re.sub(r"[^a-z0-9]", "", text)
+    except Exception:
+        return _solve_captcha_ocr(img_bytes)
+
+
+def _solve_captcha_ocr(img_bytes: bytes) -> str:
+    """ddddocr fallback: run both models, prefer the longer result."""
     global _ocr
+    import ddddocr as _ddddocr
     if _ocr is None:
-        import ddddocr as _ddddocr
         _ocr = _ddddocr.DdddOcr(show_ad=False)
-    from PIL import Image, ImageEnhance
-    import io
-    img = Image.open(io.BytesIO(img_bytes))
-    w, h = img.size
-    cropped = img.crop((0, 0, w, int(h * 0.72)))
-    cropped = cropped.resize((w * 2, int(h * 0.72) * 2), Image.LANCZOS)
-    cropped = cropped.convert("L")
-    cropped = ImageEnhance.Contrast(cropped).enhance(3)
-    buf = io.BytesIO()
-    cropped.save(buf, format="PNG")
-    return _ocr.classification(buf.getvalue())
+    ocr_beta = _ddddocr.DdddOcr(show_ad=False, beta=True)
+    r_std = _ocr.classification(img_bytes)
+    r_beta = ocr_beta.classification(img_bytes)
+    return r_beta if len(r_beta) >= len(r_std) else r_std
 
 
 class PornolabError(Exception):

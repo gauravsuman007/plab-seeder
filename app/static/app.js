@@ -672,6 +672,7 @@ function initRegister() {
   });
 }
 
+
 // --------------------------------------------------------------------- poll
 let stateSeq = 0;
 async function refreshState() {
