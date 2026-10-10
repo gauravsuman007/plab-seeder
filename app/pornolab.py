@@ -396,21 +396,53 @@ class Pornolab:
             display.stop()
 
     async def register_form(self) -> parsing.RegisterForm:
-        """Fetch the registration page and return the form metadata (captcha, lists,
-        Turnstile token) via a real headless browser — see _playwright_register.
+        """Fetch the registration form, Turnstile token, and image captcha.
+
+        The TorrentPier registration flow is three steps:
+          1. Browser: GET TOS page → click agree link → solve Turnstile → capture
+             plm session cookie + token (done by _playwright_register)
+          2. httpx: POST mode=register&reg_agreed=1 with the browser's plm cookie
+             → tracker records agreement, returns fresh form with new cap_sid and
+             a fresh captcha image (the browser's copy has a stale one)
+          3. (in register()): POST the full form with the fresh cap_sid, captcha
+             code, and Turnstile token
+
+        Step 2 happens here so the caller gets a captcha image they can actually
+        use — and so register() has a cap_sid the tracker's session considers valid.
         """
-        html, reg_cookies = await self._playwright_register()
-        # Keep the browser cookies separate from the owner's session: the
-        # register POST must go out as an anonymous request, not as the
-        # logged-in owner. Store them on the form object so register() can
-        # use them without touching self.client.
-        form = parsing.parse_register_form(html)
-        form.browser_cookies = reg_cookies          # stash for register()
-        if not form.turnstile_token:
-            import logging
-            logging.getLogger("seeder").warning(
-                "headless browser did not produce a Turnstile token; submission may fail"
-            )
+        import logging
+        log = logging.getLogger("seeder")
+
+        _html, reg_cookies = await self._playwright_register()
+        # Extract the Turnstile token from the browser's page (it's the only
+        # thing from the browser page we reuse; cap_sid and captcha come fresh
+        # from step 2 below).
+        browser_form = parsing.parse_register_form(_html)
+        turnstile_token = browser_form.turnstile_token
+        if not turnstile_token:
+            log.warning("headless browser did not produce a Turnstile token; submission may fail")
+
+        # Step 2: POST agree using the browser's session cookie so the tracker
+        # records the TOS acceptance in the same session we'll submit from.
+        reg_client = httpx.AsyncClient(
+            headers={"User-Agent": UA, "Accept-Language": "ru,en;q=0.8"},
+            timeout=30, follow_redirects=True,
+        )
+        for c in reg_cookies:
+            reg_client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
+        agree_r = await reg_client.post(
+            f"{self.base}/forum/profile.php",
+            content="mode=register&reg_agreed=1",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
+        )
+        await reg_client.aclose()
+        agree_html = self._text(agree_r)
+        form = parsing.parse_register_form(agree_html)
+        form.turnstile_token = turnstile_token   # carry the solved token over
+        form.browser_cookies = reg_cookies       # used by register() for the submit
+        if not form.cap_sid:
+            raise PornolabError("registration agree step did not return a form with cap_sid")
         return form
 
     async def register(
@@ -428,6 +460,7 @@ class Pornolab:
             raise PornolabError("registration form not initialised – fetch the form first")
         data: dict[str, str] = {
             "mode": "register",
+            "reg_agreed": "1",
             "username": username,
             "new_pass": password,
             "cfm_pass": password,
