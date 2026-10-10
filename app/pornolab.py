@@ -204,13 +204,11 @@ class Pornolab:
     #
     # Order (first that returns a token wins):
     #   1. sidecar HTTP call                  (if TURNSTILE_SIDECAR_URL is set;
-    #                                          our own camoufox packaged as a
-    #                                          separate container, see
-    #                                          sidecar/turnstile-solver/)
-    #   2. in-process camoufox + click        (~15 s cold, 1-2 s solve)
-    #   3. patchright headful under Xvfb      (safety-net; does NOT clear the
+    #                                          ghcr.io/gauravsuman007/camoufox-turnstile-solver
+    #                                          — see sidecar/turnstile-solver/)
+    #   2. patchright headful under Xvfb      (safety-net; does NOT clear the
     #                                          current ruleset on arm64, kept
-    #                                          in case the above two break)
+    #                                          in case the sidecar is unavailable)
     #
     # The caller only ever gets the HTML + cookies of a successful attempt. We
     # stop as soon as `cf-turnstile-response` is populated, so a stage that
@@ -222,7 +220,7 @@ class Pornolab:
         stages: list = []
         if os.environ.get("TURNSTILE_SIDECAR_URL"):
             stages.append(self._register_stage_sidecar)
-        stages += [self._register_stage_camoufox, self._register_stage_xvfb]
+        stages += [self._register_stage_xvfb]
 
         last_err: Exception | None = None
         for stage in stages:
@@ -381,65 +379,10 @@ class Pornolab:
         cookies = d.get("cookies", [])
         return html, cookies, token
 
-    async def _register_stage_camoufox(self):
-        """Primary: camoufox (patched Firefox, arm64-native) + a click on the
-        Turnstile widget. Clears pornolab's embedded Turnstile in ~1 s once
-        the browser is up.
-
-        Click target: the `.cf-turnstile` DIV itself, 30 px from its left edge,
-        vertically centred. Turnstile injects its iframe inside that div with
-        no `src` attribute (so an iframe-src selector misses it), but the div's
-        rect is reliable. humanize=True gives mouse movements that signal
-        activity to the widget before and after the click.
-        """
-        import random
-        from camoufox.async_api import AsyncCamoufox
-
-        reg_url = f"{self.base}/forum/profile.php?mode=register"
-        async with AsyncCamoufox(
-            headless="virtual",      # under Xvfb-like headful; no DISPLAY needed
-            geoip=False,
-            humanize=True,
-            exclude_addons=["UBO"],  # UBO blocks challenges.cloudflare.com by default
-        ) as b:
-            page = await b.new_page()
-            await page.goto(reg_url, wait_until="load")
-            # jQuery-submitted hidden form; match the onclick, not the (Russian) text.
-            await page.click('a[onclick*="go-to-reg"]')
-            await page.wait_for_load_state("load")
-            # Give the widget a few seconds to inject its iframe inside .cf-turnstile.
-            await page.wait_for_timeout(5000)
-
-            rect = await page.evaluate("""() => {
-                const d = document.querySelector('.cf-turnstile');
-                if (!d) return null;
-                const r = d.getBoundingClientRect();
-                return {x:r.x, y:r.y, w:r.width, h:r.height};
-            }""")
-            if rect and rect["w"] > 0 and rect["h"] > 0:
-                x = rect["x"] + 30 + random.uniform(-2, 2)
-                y = rect["y"] + rect["h"] / 2 + random.uniform(-2, 2)
-                await page.mouse.move(x - 60, y - 20, steps=10)
-                await page.mouse.move(x, y, steps=6)
-                await page.mouse.click(x, y, delay=120)
-
-            token = ""
-            for _ in range(45):
-                v = await page.evaluate(
-                    "document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
-                )
-                if v:
-                    token = v
-                    break
-                await page.wait_for_timeout(1000)
-            html = await page.content()
-            cookies = await page.context.cookies()
-            return html, cookies, token
-
     async def _register_stage_xvfb(self):
         """Fallback: patchright + headful + Xvfb. On arm64 this does NOT clear
         the current Turnstile ruleset (confirmed 2026-10-10: /pat/ -> 401), but
-        it's cheap to keep as a safety net in case camoufox breaks."""
+        kept as a safety net in case the sidecar is unavailable."""
         from patchright.async_api import async_playwright
         from pyvirtualdisplay import Display
         display = Display(visible=0, size=(1920, 1080))

@@ -2,16 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Build deps for camoufox's indexed-zstd C extension (gcc, g++, python headers,
-# libzstd); xvfb is still needed for the patchright fallback stage.
+# xvfb is needed for the patchright fallback stage (headful Chromium under
+# a virtual framebuffer). camoufox lives in the sidecar image now.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ python3-dev libzstd-dev xvfb \
+        xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m patchright install --with-deps chromium \
-    && camoufox fetch
+    && python -m patchright install --with-deps chromium
 
 COPY app ./app
 
