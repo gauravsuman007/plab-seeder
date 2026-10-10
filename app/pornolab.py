@@ -469,7 +469,7 @@ class Pornolab:
             form.cap_field: captcha_code,
             "user_flag_id": country,
             "user_timezone_x2": timezone,
-            "submit": "Зарегистрироваться",
+            "submit": "Отправить (Я согласен с условиями)",
         }
         if form.turnstile_token:
             data["cf-turnstile-response"] = form.turnstile_token
