@@ -436,11 +436,18 @@ class Pornolab:
             headers={"Content-Type": "application/x-www-form-urlencoded",
                      "Referer": f"{self.base}/forum/profile.php?mode=register"},
         )
+        # Capture any cookies the server updated during the agree POST (e.g. the
+        # session marker that records TOS acceptance) before closing the client.
+        updated_cookies = [
+            {"name": name, "value": value, "domain": "pornolab.net"}
+            for name, value in reg_client.cookies.items()
+        ]
         await reg_client.aclose()
         agree_html = self._text(agree_r)
         form = parsing.parse_register_form(agree_html)
         form.turnstile_token = turnstile_token   # carry the solved token over
-        form.browser_cookies = reg_cookies       # used by register() for the submit
+        # Prefer cookies as seen after the agree POST; fall back to original browser cookies.
+        form.browser_cookies = updated_cookies if updated_cookies else reg_cookies
         if not form.cap_sid:
             raise PornolabError("registration agree step did not return a form with cap_sid")
         return form
