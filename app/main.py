@@ -20,6 +20,7 @@ from .store import DB, SettingsStore
 from . import parsing as _parsing
 from . import temp_email as _te
 from . import mail_ru as _mru
+from . import gmx as _gmx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -355,27 +356,45 @@ async def tempemail_message(msg_id: str):
     }
 
 
-@app.post("/api/mailru/create")
-async def mailru_create():
-    """Create a fresh mail.ru account using sms-activate.org for phone verification.
+@app.post("/api/email/create")
+async def email_create(request: Request):
+    """Create a fresh email account automatically.
 
-    Requires sms_activate_api_key in settings. Returns the new email address and
-    password, and stores them in _active_mailru so subsequent registration calls
-    can pre-fill the email field.
+    provider:
+      "gmx"    → @web.de / @gmx.net via browser automation, no phone needed.
+                 Requires a German IP (works from this server's VPN exit).
+      "mailru" → @list.ru / @mail.ru via VK ID + sms-activate.org.
+                 Requires sms_activate_api_key in settings.
     """
-    key = store.settings.sms_activate_api_key
-    if not key:
-        _fail(ValueError("sms_activate_api_key not set in settings"))
-    domain = store.settings.mailru_domain or "mail.ru"
-    factory = _mru.MailRuFactory(sms_api_key=key, domain=domain)
-    try:
-        email, password = await factory.create()
-    except _mru.MailRuError as e:
-        _fail(e, 502)
-    except _mru.SmsActivateError as e:
-        _fail(e, 502)
-    db.event(f"mail.ru account created: {email}")
-    return {"ok": True, "email": email, "password": password}
+    b = await _body(request)
+    provider = (b.get("provider") or store.settings.email_factory_provider or "gmx").lower()
+
+    if provider == "gmx":
+        gmx_provider = store.settings.gmx_provider or "web.de"
+        factory = _gmx.GmxFactory(provider=gmx_provider)
+        try:
+            email, password = await factory.create()
+        except _gmx.GmxError as e:
+            _fail(e, 502)
+        db.event(f"email account created: {email}")
+        return {"ok": True, "email": email, "password": password}
+
+    if provider == "mailru":
+        key = store.settings.sms_activate_api_key
+        if not key:
+            _fail(ValueError("sms_activate_api_key not set in settings"))
+        domain = store.settings.mailru_domain or "mail.ru"
+        factory = _mru.MailRuFactory(sms_api_key=key, domain=domain)
+        try:
+            email, password = await factory.create()
+        except _mru.MailRuError as e:
+            _fail(e, 502)
+        except _mru.SmsActivateError as e:
+            _fail(e, 502)
+        db.event(f"email account created: {email}")
+        return {"ok": True, "email": email, "password": password}
+
+    _fail(ValueError(f"unknown provider {provider!r}; choose 'gmx' or 'mailru'"))
 
 
 @app.get("/api/events")

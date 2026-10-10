@@ -674,9 +674,9 @@ function initRegister() {
 
 
 // ----------------------------------------------------------- mail.ru factory
-function initMailRu() {
-  const btn      = $("#regMailruBtn");
-  const statusEl = $("#regMailruStatus");
+function initEmailFactory() {
+  const btn      = $("#regEmailBtn");
+  const statusEl = $("#regEmailStatus");
   const emailInput = $("#registerForm").elements["email"];
   const passInput  = $("#registerForm").elements["password"];
 
@@ -685,9 +685,9 @@ function initMailRu() {
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     statusEl.hidden = false;
-    statusEl.textContent = "Creating mail.ru account (phone verification may take ~60s)…";
+    statusEl.textContent = "Creating email account (browser automation, may take ~30–90s)…";
     try {
-      const res = await api("POST", "/api/mailru/create", {});
+      const res = await api("POST", "/api/email/create", {});
       emailInput.value = res.email;
       passInput.value  = res.password;
       emailInput.dispatchEvent(new Event("input"));
@@ -732,6 +732,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initEvents();
   initHistory();
   initRegister();
-  initMailRu();
+  initEmailFactory();
   initPoll();
 });

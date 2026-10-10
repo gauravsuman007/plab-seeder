@@ -9,6 +9,7 @@ services:
       QBIT_URL: ${QBIT_URL:-http://gateway:8080}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./data:/data
     ports:

@@ -46,8 +46,10 @@ class Settings:
     max_size_mb: int = 4096
     exclude_forums: list[int] = field(default_factory=list)
 
-    # mail.ru account factory
-    sms_activate_api_key: str = ""          # sms-activate.org API key for phone verification
+    # Email account factory
+    email_factory_provider: str = "gmx"    # "gmx" (no phone) or "mailru" (needs sms-activate key)
+    gmx_provider: str = "web.de"           # "web.de" or "gmx.net"
+    sms_activate_api_key: str = ""          # sms-activate.org key (only needed for mailru provider)
     mailru_domain: str = "mail.ru"          # @mail.ru | @bk.ru | @inbox.ru | @list.ru
 
     # The download guard
