@@ -5,3 +5,5 @@ beautifulsoup4>=4.12
 ddddocr>=1.4
 patchright>=1.47
 pyvirtualdisplay>=3.0
+camoufox>=0.4
+PyYAML>=6.0

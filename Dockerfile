@@ -2,12 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
+# Build deps for camoufox's indexed-zstd C extension (gcc, g++, python headers,
+# libzstd); xvfb is still needed for the patchright fallback stage.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ python3-dev libzstd-dev xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m patchright install --with-deps chromium
+    && python -m patchright install --with-deps chromium \
+    && camoufox fetch
 
 COPY app ./app
 

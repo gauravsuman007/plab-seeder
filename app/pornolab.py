@@ -191,55 +191,229 @@ class Pornolab:
         raise LimitReached(parsing.site_message(html) or "PornoLab returned a page instead of a .torrent")
 
     # -- registration ------------------------------------------------------- #
+    #
+    # Clearing the embedded Turnstile widget on the TorrentPier register page is
+    # the whole reason this module reaches for a browser. The ladder below is
+    # the CLAUDE.md playbook with a hard-won twist: on arm64 Debian (our host),
+    # patched Chromium alone (patchright) is NOT enough -- Cloudflare's
+    # fingerprint-assessment endpoint answers 401 Unauthorized before the
+    # challenge even runs, because there's no Google Chrome binary for arm64
+    # and Chromium's trust surface is downranked. Camoufox (patched Firefox,
+    # arm64-native) clears the same widget in ~1 s. See
+    # archive/turnstile-attempts/ for everything we ruled out.
+    #
+    # Order:
+    #   1. camoufox + click                   (primary; ~15 s cold, 1-2 s solve)
+    #   2. patchright headful under Xvfb      (fallback if camoufox breaks)
+    #
+    # The caller only ever gets the HTML + cookies of a successful attempt. We
+    # stop as soon as `cf-turnstile-response` is populated, so a stage that
+    # works short-circuits every heavier one.
     async def _playwright_register(self) -> tuple[str, list[dict]]:
-        """Drive a real browser through the terms-agree step so Cloudflare Turnstile
-        actually gets to run.
+        import logging
+        log = logging.getLogger("seeder")
 
-        FlareSolverr only waits/solves when it recognises Cloudflare's own full-page
-        challenge wrapper ("Just a moment..."). The registration form is a normal 200
-        TorrentPier page that just happens to embed a Turnstile widget, so FlareSolverr
-        logs "Challenge not detected!" and returns before the widget's async JS has a
-        chance to populate the cf-turnstile-response hidden input.
+        last_err: Exception | None = None
+        for stage in (self._register_stage_camoufox,
+                      self._register_stage_xvfb):
+            name = stage.__name__.removeprefix("_register_stage_")
+            try:
+                log.info("Turnstile: trying stage %s", name)
+                html, cookies, token = await stage()
+            except Exception as e:                               # noqa: BLE001
+                last_err = e
+                log.warning("Turnstile stage %s raised %s: %s", name, type(e).__name__, e)
+                continue
+            if token:
+                log.info("Turnstile: stage %s cleared the widget", name)
+                return html, cookies
+            log.warning("Turnstile: stage %s loaded the form but never got a token", name)
+        # No stage got a token — hand back the LAST successful HTML/cookies if
+        # any, so the caller can still show the image captcha, and let the
+        # submit fail with the server's own error. parse_register_form flags
+        # the missing token.
+        if last_err:
+            raise PornolabError(f"could not reach the registration form: {last_err}")
+        raise PornolabError("Turnstile widget never populated cf-turnstile-response")
 
-        A plain headless Playwright/Chromium browser doesn't work either: Turnstile
-        fingerprints headless rendering (missing GPU, automation-only signals) and the
-        widget just sits there unsolved. Patchright strips the usual CDP/automation
-        leaks, and running it headful under a virtual framebuffer (Xvfb) avoids the
-        headless rendering fingerprint entirely.
+    # Launch flags shared by every stage. --enable-unsafe-swiftshader turns on
+    # software WebGL (without it Chromium reports "No available adapters", which
+    # is a hard Cloudflare fingerprint fail -- the /cdn-cgi/.../pat endpoint
+    # answers 401 for a client with no GPU adapter at all). The rest hides the
+    # automation surface.
+    _LAUNCH_ARGS = [
+        "--no-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--enable-unsafe-swiftshader",
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--disable-dev-shm-usage",
+    ]
+    # Match a real desktop Linux Chrome, not the Chromium default that Turnstile
+    # downranks on sight. The viewport is a common one (not Playwright's 1280x720).
+    _CTX_UA = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/129.0.0.0 Safari/537.36"
+    )
+    _CTX_VIEWPORT = {"width": 1366, "height": 768}
+
+    async def _new_context(self, browser):
+        """A browser context with the viewport/UA/locale real browsers have."""
+        return await browser.new_context(
+            viewport=self._CTX_VIEWPORT,
+            user_agent=self._CTX_UA,
+            locale="en-US",
+            timezone_id="Europe/Berlin",
+        )
+
+    async def _run_patchright_page(self, launch, is_persistent=False):
+        """Shared body: open the register page, click agree, poll for the token.
+
+        `launch` returns either a Playwright `Browser` (we build a fresh
+        context ourselves) or a `BrowserContext` (persistent-context mode,
+        when `is_persistent=True`).
         """
-        from patchright.async_api import async_playwright
-        from pyvirtualdisplay import Display
+        reg_url = f"{self.base}/forum/profile.php?mode=register"
+        obj = await launch()
+        close_target = obj
+        try:
+            if is_persistent:
+                page = await obj.new_page()
+            else:
+                ctx = await self._new_context(obj)
+                page = await ctx.new_page()
+            # Block the page's third-party ad/promo hosts: they load mixed
+            # content and expired/wrong-CN certs, which pollutes the browser's
+            # error surface and (per diagnosis 2026-10-10) nudges Turnstile
+            # off its invisible path onto a managed challenge.
+            async def _block(route):
+                host = route.request.url.split("/", 3)[2].lower()
+                if any(bad in host for bad in ("vpipi.com", "dynspt.com", "doubleclick", "googlesyndication")):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await page.route("**/*", _block)
+
+            await page.goto(reg_url, wait_until="load")
+            # "I agree" is a jQuery-submitted hidden form; match the onclick
+            # handler, not the (Russian) link text.
+            await page.click('a[onclick*="go-to-reg"]')
+            # "networkidle" never fires once Turnstile is on the page -- its
+            # own long-poll keeps the network busy. Wait on "load" only.
+            await page.wait_for_load_state("load")
+
+            # If Turnstile shifts from invisible mode onto a managed/interactive
+            # challenge, nothing happens until a real-looking click lands inside
+            # the widget's iframe (the "I'm not a robot" checkbox). We dispatch
+            # one blind click a few seconds in; patched Chromium's mouse looks
+            # convincing enough for Turnstile to accept it. If the widget had
+            # already auto-passed, the click is harmless.
+            async def _try_click_widget():
+                await page.wait_for_timeout(4000)
+                iframe = await page.query_selector('iframe[src*="challenges.cloudflare.com"]')
+                if not iframe:
+                    return
+                box = await iframe.bounding_box()
+                if not box:
+                    return
+                # Turnstile puts its checkbox ~30 px from the iframe's left edge
+                # and vertically centred; aim for that spot plus a small jitter.
+                import random
+                x = box["x"] + 30 + random.uniform(-2, 2)
+                y = box["y"] + box["height"] / 2 + random.uniform(-2, 2)
+                await page.mouse.move(x - 50, y - 10, steps=10)
+                await page.mouse.move(x, y, steps=8)
+                await page.mouse.click(x, y, delay=90)
+            try:
+                await _try_click_widget()
+            except Exception:
+                pass  # the click is a nice-to-have; the invisible path may still carry
+
+            # The widget populates `cf-turnstile-response` asynchronously --
+            # some seconds after it clears, not when its iframe loads. Poll it.
+            token = None
+            for _ in range(45):
+                field = await page.query_selector('input[name="cf-turnstile-response"]')
+                token = await field.input_value() if field else None
+                if token:
+                    break
+                await page.wait_for_timeout(1000)
+            html = await page.content()
+            cookies = await page.context.cookies()
+            return html, cookies, token
+        finally:
+            await close_target.close()
+
+    async def _register_stage_camoufox(self):
+        """Primary: camoufox (patched Firefox, arm64-native) + a click on the
+        Turnstile widget. Clears pornolab's embedded Turnstile in ~1 s once
+        the browser is up.
+
+        Click target: the `.cf-turnstile` DIV itself, 30 px from its left edge,
+        vertically centred. Turnstile injects its iframe inside that div with
+        no `src` attribute (so an iframe-src selector misses it), but the div's
+        rect is reliable. humanize=True gives mouse movements that signal
+        activity to the widget before and after the click.
+        """
+        import random
+        from camoufox.async_api import AsyncCamoufox
 
         reg_url = f"{self.base}/forum/profile.php?mode=register"
+        async with AsyncCamoufox(
+            headless="virtual",      # under Xvfb-like headful; no DISPLAY needed
+            geoip=False,
+            humanize=True,
+            exclude_addons=["UBO"],  # UBO blocks challenges.cloudflare.com by default
+        ) as b:
+            page = await b.new_page()
+            await page.goto(reg_url, wait_until="load")
+            # jQuery-submitted hidden form; match the onclick, not the (Russian) text.
+            await page.click('a[onclick*="go-to-reg"]')
+            await page.wait_for_load_state("load")
+            # Give the widget a few seconds to inject its iframe inside .cf-turnstile.
+            await page.wait_for_timeout(5000)
+
+            rect = await page.evaluate("""() => {
+                const d = document.querySelector('.cf-turnstile');
+                if (!d) return null;
+                const r = d.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+            }""")
+            if rect and rect["w"] > 0 and rect["h"] > 0:
+                x = rect["x"] + 30 + random.uniform(-2, 2)
+                y = rect["y"] + rect["h"] / 2 + random.uniform(-2, 2)
+                await page.mouse.move(x - 60, y - 20, steps=10)
+                await page.mouse.move(x, y, steps=6)
+                await page.mouse.click(x, y, delay=120)
+
+            token = ""
+            for _ in range(45):
+                v = await page.evaluate(
+                    "document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
+                )
+                if v:
+                    token = v
+                    break
+                await page.wait_for_timeout(1000)
+            html = await page.content()
+            cookies = await page.context.cookies()
+            return html, cookies, token
+
+    async def _register_stage_xvfb(self):
+        """Fallback: patchright + headful + Xvfb. On arm64 this does NOT clear
+        the current Turnstile ruleset (confirmed 2026-10-10: /pat/ -> 401), but
+        it's cheap to keep as a safety net in case camoufox breaks."""
+        from patchright.async_api import async_playwright
+        from pyvirtualdisplay import Display
         display = Display(visible=0, size=(1920, 1080))
         display.start()
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=False, args=["--no-sandbox"])
-                page = await browser.new_page()
-                try:
-                    await page.goto(reg_url, wait_until="load")
-                    # the "I agree" link submits a hidden form (id="go-to-reg") via
-                    # jQuery; match on the onclick handler, not the (Russian) link text
-                    await page.click('a[onclick*="go-to-reg"]')
-                    # "networkidle" never fires once Turnstile is on the page — its own
-                    # background requests keep the network busy, so wait for "load" only
-                    await page.wait_for_load_state("load")
-                    # Turnstile resolves asynchronously after the form page loads — poll
-                    # the hidden input it fills in rather than trusting the first snapshot
-                    for _ in range(25):
-                        field = await page.query_selector('input[name="cf-turnstile-response"]')
-                        value = await field.input_value() if field else None
-                        if value:
-                            break
-                        await page.wait_for_timeout(1000)
-                    html = await page.content()
-                    cookies = await page.context.cookies()
-                finally:
-                    await browser.close()
+                async def launch():
+                    return await pw.chromium.launch(headless=False, args=self._LAUNCH_ARGS)
+                return await self._run_patchright_page(launch)
         finally:
             display.stop()
-        return html, cookies
 
     async def register_form(self) -> parsing.RegisterForm:
         """Fetch the registration page and return the form metadata (captcha, lists,
