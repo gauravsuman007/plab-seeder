@@ -18,6 +18,7 @@ from .pornolab import PornolabError, _solve_captcha as _ocr_solve
 from .qbit import QbitError
 from .store import DB, SettingsStore
 from . import parsing as _parsing
+from . import temp_email as _te
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -223,6 +224,7 @@ async def proxy_trackers(infohash: str):
 
 
 _pending_register_form: _parsing.RegisterForm | None = None
+_active_temp_address: _te.TempAddress | None = None
 
 
 @app.get("/api/register/form")
@@ -234,15 +236,19 @@ async def register_form():
     except PornolabError as e:
         _fail(e, 502)
     _pending_register_form = form
-    # fetch captcha image the same way the login flow does
+    # Fetch the captcha using a client seeded with the browser's anonymous
+    # session cookies — the captcha is tied to that session, not the owner's.
     img_data = None
     captcha_text = None
     if form.captcha_url:
         try:
-            img = await engine.pl.client.get(
-                form.captcha_url,
-                headers={"Referer": f"{engine.pl.base}/forum/profile.php?mode=register"},
-            )
+            async with httpx.AsyncClient(timeout=15) as _cap_client:
+                for c in form.browser_cookies:
+                    _cap_client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
+                img = await _cap_client.get(
+                    form.captcha_url,
+                    headers={"Referer": f"{engine.pl.base}/forum/profile.php?mode=register"},
+                )
             mime = img.headers.get("content-type", "image/png").split(";")[0]
             if mime.startswith("image/"):
                 img_data = f"data:{mime};base64,{base64.b64encode(img.content).decode()}"
@@ -283,6 +289,65 @@ async def register(request: Request):
         _pending_register_form = None
         db.event("Registration submitted – check your email for the activation link")
     return result
+
+
+@app.get("/api/tempemail/providers")
+async def tempemail_providers():
+    return {"providers": _te.provider_names()}
+
+
+@app.post("/api/tempemail/new")
+async def tempemail_new(request: Request):
+    global _active_temp_address
+    b = await _body(request)
+    provider = b.get("provider") or None
+    try:
+        addr = await _te.new_address(provider)
+    except _te.ProviderError as e:
+        _fail(e, 502)
+    _active_temp_address = addr
+    return {"address": addr.address, "provider": addr.provider}
+
+
+@app.get("/api/tempemail/inbox")
+async def tempemail_inbox():
+    if not _active_temp_address:
+        _fail(ValueError("no active temp address – call /api/tempemail/new first"))
+    try:
+        msgs = await _active_temp_address.inbox()
+    except _te.ProviderError as e:
+        _fail(e, 502)
+    return {
+        "address": _active_temp_address.address,
+        "provider": _active_temp_address.provider,
+        "messages": [
+            {
+                "id": m.id,
+                "from": m.from_addr,
+                "subject": m.subject,
+                "body_text": m.body_text,
+                "body_html": m.body_html,
+            }
+            for m in msgs
+        ],
+    }
+
+
+@app.get("/api/tempemail/message/{msg_id}")
+async def tempemail_message(msg_id: str):
+    if not _active_temp_address:
+        _fail(ValueError("no active temp address"))
+    try:
+        m = await _active_temp_address.message(msg_id)
+    except _te.ProviderError as e:
+        _fail(e, 502)
+    return {
+        "id": m.id,
+        "from": m.from_addr,
+        "subject": m.subject,
+        "body_text": m.body_text,
+        "body_html": m.body_html,
+    }
 
 
 @app.get("/api/events")

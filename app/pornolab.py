@@ -398,58 +398,24 @@ class Pornolab:
     async def register_form(self) -> parsing.RegisterForm:
         """Fetch the registration form, Turnstile token, and image captcha.
 
-        The TorrentPier registration flow is three steps:
-          1. Browser: GET TOS page → click agree link → solve Turnstile → capture
-             plm session cookie + token (done by _playwright_register)
-          2. httpx: POST mode=register&reg_agreed=1 with the browser's plm cookie
-             → tracker records agreement, returns fresh form with new cap_sid and
-             a fresh captcha image (the browser's copy has a stale one)
-          3. (in register()): POST the full form with the fresh cap_sid, captcha
-             code, and Turnstile token
-
-        Step 2 happens here so the caller gets a captcha image they can actually
-        use — and so register() has a cap_sid the tracker's session considers valid.
+        The browser (sidecar/Xvfb) navigates to the TOS page, clicks "I agree",
+        and lands on the full registration form with Turnstile already solved.
+        That browser session is already in "agreed" state server-side, so we use
+        its HTML and cookies directly — no additional agree POST needed.
         """
         import logging
         log = logging.getLogger("seeder")
 
         _html, reg_cookies = await self._playwright_register()
-        # Extract the Turnstile token from the browser's page (it's the only
-        # thing from the browser page we reuse; cap_sid and captcha come fresh
-        # from step 2 below).
-        browser_form = parsing.parse_register_form(_html)
-        turnstile_token = browser_form.turnstile_token
-        if not turnstile_token:
+        form = parsing.parse_register_form(_html)
+        if not form.turnstile_token:
             log.warning("headless browser did not produce a Turnstile token; submission may fail")
-
-        # Step 2: POST agree using the browser's session cookie so the tracker
-        # records the TOS acceptance in the same session we'll submit from.
-        reg_client = httpx.AsyncClient(
-            headers={"User-Agent": UA, "Accept-Language": "ru,en;q=0.8"},
-            timeout=30, follow_redirects=True,
-        )
-        for c in reg_cookies:
-            reg_client.cookies.set(c["name"], c["value"], domain=c.get("domain", "").lstrip("."))
-        agree_r = await reg_client.post(
-            f"{self.base}/forum/profile.php",
-            content="mode=register&reg_agreed=1",
-            headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Referer": f"{self.base}/forum/profile.php?mode=register"},
-        )
-        # Capture any cookies the server updated during the agree POST (e.g. the
-        # session marker that records TOS acceptance) before closing the client.
-        updated_cookies = [
-            {"name": name, "value": value, "domain": "pornolab.net"}
-            for name, value in reg_client.cookies.items()
-        ]
-        await reg_client.aclose()
-        agree_html = self._text(agree_r)
-        form = parsing.parse_register_form(agree_html)
-        form.turnstile_token = turnstile_token   # carry the solved token over
-        # Prefer cookies as seen after the agree POST; fall back to original browser cookies.
-        form.browser_cookies = updated_cookies if updated_cookies else reg_cookies
         if not form.cap_sid:
-            raise PornolabError("registration agree step did not return a form with cap_sid")
+            raise PornolabError("browser registration form has no cap_sid")
+        # The submit POST must use the same session cookies the browser used so
+        # the server recognises the TOS-agreed state. Keep them separate from
+        # self.client (which carries the owner's logged-in session).
+        form.browser_cookies = reg_cookies
         return form
 
     async def register(
