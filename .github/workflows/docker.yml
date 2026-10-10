@@ -4,6 +4,10 @@ on:
   push:
     branches: ["**"]
     tags: ["v*"]
+  # Triggered by the camoufox-turnstile-solver sidecar repo after a successful
+  # push to main, so the seeder image always pins a fresh sidecar.
+  repository_dispatch:
+    types: [sidecar-updated]
 
 permissions:
   contents: read
