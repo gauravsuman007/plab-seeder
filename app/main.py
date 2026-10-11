@@ -21,6 +21,7 @@ from . import parsing as _parsing
 from . import temp_email as _te
 from . import mail_ru as _mru
 from . import gmx as _gmx
+from . import tuta as _tuta
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -361,13 +362,28 @@ async def email_create(request: Request):
     """Create a fresh email account automatically.
 
     provider:
-      "gmx"    → @web.de / @gmx.net via browser automation, no phone needed.
-                 Requires a German IP (works from this server's VPN exit).
+      "tuta"   → @tutamail.com, no phone, no captcha. The only provider that's
+                 actually phone-free end to end — recommended default.
+                 Requires TURNSTILE_SIDECAR_URL (reuses the camoufox sidecar).
+      "gmx"    → @web.de / @gmx.net. DEAD END: requires a phone number at the
+                 final registration step — see app/gmx.py's module docstring.
       "mailru" → @list.ru / @mail.ru via VK ID + sms-activate.org.
                  Requires sms_activate_api_key in settings.
     """
     b = await _body(request)
-    provider = (b.get("provider") or store.settings.email_factory_provider or "gmx").lower()
+    provider = (b.get("provider") or store.settings.email_factory_provider or "tuta").lower()
+
+    if provider == "tuta":
+        sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+        if not sidecar:
+            _fail(ValueError("TURNSTILE_SIDECAR_URL not set — the tuta provider reuses that sidecar's camoufox browser"))
+        factory = _tuta.TutaFactory(sidecar_url=sidecar)
+        try:
+            email, password = await factory.create()
+        except _tuta.TutaError as e:
+            _fail(e, 502)
+        db.event(f"email account created: {email}")
+        return {"ok": True, "email": email, "password": password}
 
     if provider == "gmx":
         gmx_provider = store.settings.gmx_provider or "web.de"
@@ -394,7 +410,28 @@ async def email_create(request: Request):
         db.event(f"email account created: {email}")
         return {"ok": True, "email": email, "password": password}
 
-    _fail(ValueError(f"unknown provider {provider!r}; choose 'gmx' or 'mailru'"))
+    _fail(ValueError(f"unknown provider {provider!r}; choose 'tuta', 'gmx', or 'mailru'"))
+
+
+@app.post("/api/email/activation")
+async def email_activation(request: Request):
+    """Poll an email account for the PornoLab activation link.
+
+    Only "tuta" is supported here — gmx/mailru's IMAP-based activation lookup
+    is a separate code path (gmx_find_activation / mailru_find_activation)
+    that the UI doesn't currently call.
+    """
+    b = await _body(request)
+    email = (b.get("email") or "").strip()
+    password = b.get("password") or ""
+    if not email or not password:
+        _fail(ValueError("email and password are required"))
+    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+    if not sidecar:
+        _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
+    factory = _tuta.TutaFactory(sidecar_url=sidecar)
+    url = await factory.find_activation(email, password, timeout=int(b.get("timeout") or 120))
+    return {"ok": True, "url": url}
 
 
 @app.get("/api/events")

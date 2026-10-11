@@ -204,12 +204,15 @@
         <div class="card">
           <h2>Email account factory</h2>
           <p class="muted small">Powers the "New email" button on the Register tab.
-             GMX/web.de needs no phone and works from the server's German IP.
-             mail.ru requires an sms-activate.org key (~$0.10/number).</p>
+             Tuta is the only option that's actually phone-free: no phone, no
+             captcha. GMX/web.de and gmx.net both require a phone at the final
+             registration step despite initial appearances — kept only in case
+             that changes. mail.ru requires an sms-activate.org key (~$0.10/number).</p>
           <div class="form-grid">
             <label>Provider
               <select name="email_factory_provider">
-                <option value="gmx">GMX / web.de (no phone, German IP required)</option>
+                <option value="tuta">Tuta / tutamail.com (no phone, no captcha)</option>
+                <option value="gmx">GMX / web.de (requires phone — dead end)</option>
                 <option value="mailru">mail.ru (phone via sms-activate.org)</option>
               </select>
             </label>

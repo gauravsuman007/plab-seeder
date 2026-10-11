@@ -47,7 +47,11 @@ class Settings:
     exclude_forums: list[int] = field(default_factory=list)
 
     # Email account factory
-    email_factory_provider: str = "gmx"    # "gmx" (no phone) or "mailru" (needs sms-activate key)
+    # "tuta" is the only one that's actually phone-free end to end: web.de/
+    # gmx.net require a phone at the final registration step (see app/gmx.py's
+    # module docstring) and mail.ru requires one via VK ID. Kept as options in
+    # case either provider drops its phone gate later.
+    email_factory_provider: str = "tuta"   # "tuta" (no phone) | "gmx" (needs phone) | "mailru" (needs sms-activate key)
     gmx_provider: str = "web.de"           # "web.de" or "gmx.net"
     sms_activate_api_key: str = ""          # sms-activate.org key (only needed for mailru provider)
     mailru_domain: str = "mail.ru"          # @mail.ru | @bk.ru | @inbox.ru | @list.ru
