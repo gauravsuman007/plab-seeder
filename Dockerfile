@@ -11,11 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Tailscale CLI only (no tailscaled here) -- this talks to the tailscale
 # sidecar's daemon over a shared socket volume, so this container never
 # needs NET_ADMIN or its own tailscaled.
-RUN curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.78.1_amd64.tgz \
+# TARGETARCH is set automatically by buildx/the multi-platform CI build
+# (amd64/arm64) -- the project's own hosts include both.
+ARG TARGETARCH
+RUN TS_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo amd64) \
+    && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.78.1_${TS_ARCH}.tgz" \
         -o /tmp/ts.tgz \
     && tar -xzf /tmp/ts.tgz -C /tmp \
-    && mv /tmp/tailscale_1.78.1_amd64/tailscale /usr/local/bin/tailscale \
-    && rm -rf /tmp/ts.tgz /tmp/tailscale_1.78.1_amd64
+    && mv "/tmp/tailscale_1.78.1_${TS_ARCH}/tailscale" /usr/local/bin/tailscale \
+    && rm -rf /tmp/ts.tgz "/tmp/tailscale_1.78.1_${TS_ARCH}"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \

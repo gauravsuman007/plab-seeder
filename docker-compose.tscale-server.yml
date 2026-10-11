@@ -1,0 +1,88 @@
+# Server-deploy variant of docker-compose.standalone.yml -- uses the
+# published image instead of `build: .` (the repo isn't checked out on the
+# server), with distinct container names/ports so it runs alongside the
+# existing pornolab-seeder stack without conflicting.
+#
+#   docker compose -p plab-seeder-tscale -f docker-compose.tscale-server.yml up -d
+#
+# UI:        http://<host>:8011
+# qBit WebUI: http://<host>:8012  (peer port 6882)
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: plab-seeder-tscale-ts
+    hostname: plab-seeder-tscale
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    ports:
+      - "8011:8000"
+      - "8012:8080"
+      - "6882:6881"
+      - "6882:6881/udp"
+    restart: unless-stopped
+    healthcheck:
+      # Socket existing proves tailscaled booted and is listening --
+      # deliberately NOT `tailscale status`, which exits 1 whenever the
+      # node isn't logged in yet (confirmed live), and "not logged in" is
+      # a normal, supported state here, not a failure.
+      test: ["CMD", "test", "-S", "/var/run/tailscale/tailscaled.sock"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: plab-seeder-tscale-qbit
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      WEBUI_PORT: 8080
+    volumes:
+      - ./qbit-config:/config
+      - ./downloads:/downloads
+      - ./qbit-init/10-whitelist:/custom-cont-init.d/10-whitelist:ro
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pornolab-seeder:
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
+    container_name: plab-seeder-tscale-app
+    environment:
+      DATA_DIR: /data
+      QBIT_URL: http://localhost:8080
+      SELF_URL: http://localhost:8000
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    volumes:
+      - ./data:/data
+      - tailscale-socket:/var/run/tailscale:ro
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+volumes:
+  tailscale-state:
+  tailscale-socket:
