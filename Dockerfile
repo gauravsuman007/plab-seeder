@@ -5,8 +5,11 @@ WORKDIR /app
 # No browser here any more -- registration (camoufox/patchright/Xvfb) moved
 # to the separate plab-register service, which owns the only browser in the
 # deployment. This image is just the seeding app + the tailscale CLI.
+# iproute2 is for the `ip route` call in app/tailscale.py that re-pins the
+# LAN route after an exit node takes over the default route (see that
+# module).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
+        curl iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Tailscale CLI only (no tailscaled here) -- this talks to the tailscale

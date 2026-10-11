@@ -100,10 +100,21 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      # Selecting an exit node replaces the shared netns's default route
+      # with one via tailscale0, which also swallows return traffic for
+      # inbound WebUI connections from this subnet -- app/tailscale.py
+      # re-pins an explicit route for it via the original gateway once an
+      # exit node is set (same fix as plab-register's). Set to the subnet
+      # the WebUI is actually reached from; leave unset to skip it.
+      LAN_CIDR: ${LAN_CIDR:-}
     volumes:
       - ./data:/data
       - tailscale-socket:/var/run/tailscale:ro
     network_mode: "service:tailscale"
+    # Needed for the `ip route` call above -- it runs in the shared netns,
+    # but capabilities are per-container, not per-netns.
+    cap_add:
+      - NET_ADMIN
     depends_on:
       tailscale:
         condition: service_healthy
