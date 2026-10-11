@@ -95,8 +95,16 @@ async def login() -> dict:
     the printed URL, then let it finish on its own."""
     if not available():
         raise TailscaleError("tailscale socket not found -- is the tailscale sidecar running?")
+    # `tailscale up` refuses to run unless every non-default pref already
+    # set on the daemon (by containerboot's own startup `up` call, or a
+    # prior one of ours) is restated -- otherwise it exits immediately with
+    # "requires mentioning all non-default flags" instead of printing a
+    # login URL. Restate the full set containerboot/the compose file apply
+    # (--accept-dns=false, --netfilter-mode=off) rather than just
+    # --accept-routes, so this works regardless of what's already set.
     proc = await asyncio.create_subprocess_exec(
-        TS_BIN, f"--socket={TS_SOCKET}", "up", "--accept-routes",
+        TS_BIN, f"--socket={TS_SOCKET}", "up",
+        "--accept-routes", "--accept-dns=false", "--netfilter-mode=off",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     loop = asyncio.get_running_loop()

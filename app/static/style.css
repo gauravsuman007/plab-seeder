@@ -31,6 +31,7 @@ h2 { font-size: 15px; color: var(--text); }
 .topbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
@@ -51,6 +52,7 @@ h2 { font-size: 15px; color: var(--text); }
   padding: 3px 10px; border-radius: 999px;
   background: var(--panel-2); border: 1px solid var(--border);
   font-size: 12px; color: var(--muted);
+  white-space: nowrap;
 }
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .pill.ok .dot { background: var(--good); }
@@ -109,6 +111,12 @@ main { padding: 20px; max-width: 1280px; margin: 0 auto; }
 .bar-fill.bad { background: var(--bad); }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+@media (max-width: 600px) {
+  .topbar { padding: 10px 12px; gap: 10px; }
+  .tabs { padding: 8px 12px 0; overflow-x: auto; }
+  main { padding: 12px; }
+  .form-grid { grid-template-columns: 1fr; }
+}
 .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .form-grid input[type="text"], .form-grid input[type="password"], .form-grid input[type="number"] {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
@@ -151,6 +159,7 @@ main { padding: 20px; max-width: 1280px; margin: 0 auto; }
 .badge {
   display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  white-space: nowrap;
 }
 .badge.good { color: var(--good); border-color: var(--good); }
 .badge.warn { color: var(--warn); border-color: var(--warn); }

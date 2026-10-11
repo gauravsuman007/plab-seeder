@@ -36,6 +36,27 @@ services:
       # outside the container until this was set, even though everything
       # worked from inside it).
       TS_EXTRA_ARGS: "--netfilter-mode=off"
+      # Without this, containerboot gives up waiting for interactive
+
+      # login approval after its default boot timeout and kills tailscaled,
+
+      # which the restart policy then retries forever -- a crash loop that
+
+      # tears down this container's shared network namespace every ~60s
+
+      # and was the real cause of intermittent published-port failures for
+
+      # the app/qbit containers sharing it (confirmed live via docker events:
+
+      # RestartCount climbing once a minute, 'tailscale up failed: context
+
+      # deadline exceeded' in the logs). Unlogged-in is a normal, supported
+
+      # state here (see the healthcheck above), so this container should sit
+
+      # and wait, not restart.
+
+      TS_BOOT_TIMEOUT: "87600h"
     volumes:
       - tailscale-state:/var/lib/tailscale
       - tailscale-socket:/var/run/tailscale

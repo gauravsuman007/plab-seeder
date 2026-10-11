@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (amd64/arm64) -- the project's own hosts include both.
 ARG TARGETARCH
 RUN TS_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo amd64) \
-    && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.78.1_${TS_ARCH}.tgz" \
+    && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.102.5_${TS_ARCH}.tgz" \
         -o /tmp/ts.tgz \
     && tar -xzf /tmp/ts.tgz -C /tmp \
-    && mv "/tmp/tailscale_1.78.1_${TS_ARCH}/tailscale" /usr/local/bin/tailscale \
-    && rm -rf /tmp/ts.tgz "/tmp/tailscale_1.78.1_${TS_ARCH}"
+    && mv "/tmp/tailscale_1.102.5_${TS_ARCH}/tailscale" /usr/local/bin/tailscale \
+    && rm -rf /tmp/ts.tgz "/tmp/tailscale_1.102.5_${TS_ARCH}"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
