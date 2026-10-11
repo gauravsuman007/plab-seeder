@@ -1,0 +1,78 @@
+# Opt-in tailscale overlay -- "normal socket" mode: qBittorrent stays
+# wherever it already is (reached over QBIT_URL/GATEWAY_URL, same as the
+# default deployment), only this app's own outbound traffic can be routed
+# through a tailscale exit node.
+#
+# This is a full replacement for docker-compose.yml, not a layer on top of
+# it -- network_mode: service:X and a service's own ports/networks can't
+# both be set, and compose merges list-type keys across -f files rather
+# than letting a later file clear them, so stacking this on the base file
+# would conflict. Deploy with:
+#
+#   docker compose -f docker-compose.tailscale.yml -f docker-compose.override.yml up -d
+#
+# For the bundled-qBittorrent variant (qbit shares the tailscale network
+# too, so an exit node routes its torrent traffic as well), use
+# docker-compose.standalone.yml instead -- that one's fully self-contained
+# with its own tailscale sidecar, so don't combine the two.
+#
+# With no exit node selected (or not logged in at all), egress is the
+# ordinary network, identical to the non-tailscale deployment -- tailscale
+# only changes routing once an exit node is actively set from the UI.
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ts-pornolab-seeder
+    hostname: pornolab-seeder
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - vpngate
+      - ipv6
+    ports:
+      - "${SEEDER_PORT:-8010}:8000"
+    restart: unless-stopped
+
+  pornolab-seeder:
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
+    container_name: pornolab-seeder
+    environment:
+      DATA_DIR: /data
+      QBIT_URL: ${QBIT_URL:-http://gateway:8080}
+      GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    volumes:
+      - ./data:/data
+      - tailscale-socket:/var/run/tailscale:ro
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+volumes:
+  tailscale-state:
+  tailscale-socket:
+
+networks:
+  vpngate:
+    name: vpngate-torrent_default
+    external: true
+  ipv6:
+    enable_ipv6: true

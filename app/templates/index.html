@@ -18,6 +18,7 @@
     <input type="checkbox" id="autoToggle">
     <span>Auto-seed</span>
   </label>
+  <span class="badge" id="egressBadge" title="Network egress — set in Settings → Tailscale">Direct</span>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -257,6 +258,34 @@
               <input type="password" name="sms_activate_api_key" autocomplete="new-password"
                      placeholder="•••••••• (unchanged)">
             </label>
+          </div>
+        </div>
+
+        <div class="card" id="tailscaleCard">
+          <h2>Tailscale</h2>
+          <p class="muted small">Optional. Only present when the tailscale sidecar is deployed alongside
+             this app (see docker-compose.tailscale.yml) — otherwise this card stays blank and every
+             connection uses the normal network, same as always. When no exit node is selected below,
+             traffic is also normal/direct even with tailscale running.</p>
+          <div id="tailscaleNotConfigured" class="muted small" hidden>Tailscale sidecar not detected.</div>
+          <div id="tailscaleBody" hidden>
+            <div class="form-grid">
+              <div id="tailscaleLoggedOut" hidden>
+                <button type="button" class="btn" id="tailscaleLoginBtn">Log in</button>
+                <div id="tailscaleLoginUrl" class="muted small" hidden></div>
+              </div>
+              <div id="tailscaleLoggedIn" hidden>
+                <label>Exit node
+                  <select id="tailscaleExitNodeSelect">
+                    <option value="">Direct (no exit node)</option>
+                  </select>
+                </label>
+                <div class="form-actions">
+                  <button type="button" class="btn small" id="tailscaleLogoutBtn">Log out</button>
+                </div>
+              </div>
+            </div>
+            <div id="tailscaleStatus" class="muted small" hidden></div>
           </div>
         </div>
 

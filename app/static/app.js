@@ -549,6 +549,123 @@ function initSettings() {
   });
 }
 
+// ----------------------------------------------------------------- tailscale
+function renderTailscale(st) {
+  const notConfigured = $("#tailscaleNotConfigured");
+  const body = $("#tailscaleBody");
+  const loggedOutEl = $("#tailscaleLoggedOut");
+  const loggedInEl = $("#tailscaleLoggedIn");
+  const select = $("#tailscaleExitNodeSelect");
+  const badge = $("#egressBadge");
+
+  if (!st.configured) {
+    notConfigured.hidden = false;
+    body.hidden = true;
+    badge.textContent = "Direct";
+    badge.title = "Network egress: direct (tailscale sidecar not deployed)";
+    badge.classList.remove("good");
+    return;
+  }
+  notConfigured.hidden = true;
+  body.hidden = false;
+  loggedOutEl.hidden = st.logged_in;
+  loggedInEl.hidden = !st.logged_in;
+
+  if (st.logged_in) {
+    const nodes = st.exit_nodes || [];
+    const key = nodes.map(n => n.id).join(",");
+    if (select.dataset.nodesKey !== key) {
+      select.innerHTML = `<option value="">Direct (no exit node)</option>` +
+        nodes.map(n => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name || n.hostname)}${n.online ? "" : " (offline)"}</option>`).join("");
+      select.dataset.nodesKey = key;
+    }
+    select.value = st.exit_node_id || "";
+  }
+
+  if (st.exit_node_id) {
+    badge.textContent = `Exit: ${st.exit_node_name || st.exit_node_id}`;
+    badge.title = `Network egress: through tailscale exit node ${st.exit_node_name || st.exit_node_id}`;
+    badge.classList.add("good");
+  } else {
+    badge.textContent = "Direct";
+    badge.title = st.logged_in
+      ? "Network egress: direct (tailscale logged in, no exit node selected)"
+      : "Network egress: direct (tailscale not logged in)";
+    badge.classList.remove("good");
+  }
+}
+
+async function refreshTailscale() {
+  try {
+    renderTailscale(await api("GET", "/api/tailscale/status"));
+  } catch (e) { /* leave badge as-is; don't spam toasts for a background poll */ }
+}
+
+function initTailscale() {
+  $("#tailscaleLoginBtn").addEventListener("click", async () => {
+    const btn = $("#tailscaleLoginBtn");
+    const urlEl = $("#tailscaleLoginUrl");
+    const statusEl = $("#tailscaleStatus");
+    btn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = "Starting login…";
+    try {
+      const res = await api("POST", "/api/tailscale/login", {});
+      if (res.already_logged_in) {
+        statusEl.textContent = "Already logged in.";
+        await refreshTailscale();
+      } else {
+        urlEl.hidden = false;
+        urlEl.innerHTML = `Open this link to approve: <a href="${escapeHtml(res.url)}" target="_blank" rel="noopener">${escapeHtml(res.url)}</a>`;
+        statusEl.textContent = "Waiting for you to approve in the browser — this updates automatically.";
+        let tries = 0;
+        const iv = setInterval(async () => {
+          tries++;
+          const st = await api("GET", "/api/tailscale/status").catch(() => null);
+          if (st) renderTailscale(st);
+          if ((st && st.logged_in) || tries > 40) {
+            clearInterval(iv);
+            if (st && st.logged_in) {
+              statusEl.textContent = "✓ Logged in.";
+              urlEl.hidden = true;
+            }
+          }
+        }, 3000);
+      }
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#tailscaleLogoutBtn").addEventListener("click", async () => {
+    if (!confirm("Log out of tailscale? Any active exit node will stop being used.")) return;
+    try {
+      await api("POST", "/api/tailscale/logout", {});
+      await refreshTailscale();
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  });
+
+  $("#tailscaleExitNodeSelect").addEventListener("change", async (ev) => {
+    const statusEl = $("#tailscaleStatus");
+    statusEl.hidden = false;
+    statusEl.textContent = "Switching exit node…";
+    try {
+      const st = await api("POST", "/api/tailscale/exit-node", { node_id: ev.target.value });
+      renderTailscale(st);
+      statusEl.textContent = st.exit_node_id ? `✓ Routing through ${st.exit_node_name}` : "✓ Back to direct.";
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    }
+  });
+
+  refreshTailscale();
+  setInterval(refreshTailscale, 20000);
+}
+
 // ------------------------------------------------------------------- events
 async function loadEvents() {
   const events = await api("GET", `/api/events?limit=300&account_id=${currentAccountId}`);
@@ -1170,6 +1287,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initLogin();
   initCandidates();
   initSettings();
+  initTailscale();
   initEvents();
   initAccounts();
   initEmails();

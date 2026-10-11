@@ -38,6 +38,7 @@ from . import temp_email as _te
 from . import mail_ru as _mru
 from . import gmx as _gmx
 from . import tuta as _tuta
+from . import tailscale as _ts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("seeder")
@@ -230,6 +231,40 @@ async def set_settings(request: Request):
     if engines:
         next(iter(engines.values())).db.event("Global settings saved")
     return global_store.public()
+
+
+@app.get("/api/tailscale/status")
+async def tailscale_status():
+    """Current egress state -- used both by the Settings tab and by the
+    small badge every page shows in the top-right corner. Reports
+    configured:false whenever the tailscale sidecar/socket isn't present,
+    which the UI renders as plain 'Direct' with no tailscale controls."""
+    return await _ts.status()
+
+
+@app.post("/api/tailscale/login")
+async def tailscale_login():
+    try:
+        return await _ts.login()
+    except _ts.TailscaleError as e:
+        _fail(e, 502)
+
+
+@app.post("/api/tailscale/logout")
+async def tailscale_logout():
+    await _ts.logout()
+    return {"ok": True}
+
+
+@app.post("/api/tailscale/exit-node")
+async def tailscale_exit_node(request: Request):
+    b = await _body(request)
+    node_id = (b.get("node_id") or "").strip() or None
+    try:
+        await _ts.set_exit_node(node_id)
+    except _ts.TailscaleError as e:
+        _fail(e, 502)
+    return await _ts.status()
 
 
 @app.post("/api/auto")
