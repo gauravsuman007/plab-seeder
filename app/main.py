@@ -488,7 +488,9 @@ async def register_form():
     except PornolabError as e:
         _fail(e, 502)
     _pending_register_form = form
-    return await _render_register_form(form)
+    rendered = await _render_register_form(form)
+    rendered.pop("captcha_bytes", None)   # raw image bytes, internal use by /api/register/auto only
+    return rendered
 
 
 async def _render_register_form(form: _parsing.RegisterForm) -> dict:
