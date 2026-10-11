@@ -24,26 +24,16 @@ services:
       # outside the container until this was set, even though everything
       # worked from inside it).
       TS_EXTRA_ARGS: "--netfilter-mode=off"
-      # Without this, containerboot gives up waiting for interactive
-
-      # login approval after its default boot timeout and kills tailscaled,
-
-      # which the restart policy then retries forever -- a crash loop that
-
-      # tears down this container's shared network namespace every ~60s
-
-      # and was the real cause of intermittent published-port failures for
-
-      # the app/qbit containers sharing it (confirmed live via docker events:
-
+      # Without this, containerboot gives up waiting for interactive login
+      # approval after its default boot timeout and kills tailscaled, which
+      # the restart policy then retries forever -- a crash loop that tears
+      # down this container's shared network namespace every ~60s and was
+      # the real cause of intermittent published-port failures for the
+      # app/qbit containers sharing it (confirmed live via docker events:
       # RestartCount climbing once a minute, 'tailscale up failed: context
-
       # deadline exceeded' in the logs). Unlogged-in is a normal, supported
-
-      # state here (see the healthcheck above), so this container should sit
-
-      # and wait, not restart.
-
+      # state here (see the healthcheck above), so this container should
+      # sit and wait, not restart.
       TS_BOOT_TIMEOUT: "87600h"
     volumes:
       - tailscale-state:/var/lib/tailscale
@@ -97,6 +87,11 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      # Shares this stack's netns (below), so the camoufox browser that
+      # drives Tuta/registration signup also egresses through whatever
+      # exit node is selected -- unlike the main stack's turnstile-solver,
+      # which sits on its own network and never sees tailscale routing.
+      TURNSTILE_SIDECAR_URL: http://localhost:8193
     volumes:
       - ./data:/data
       - tailscale-socket:/var/run/tailscale:ro
@@ -111,6 +106,25 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
+
+  turnstile-solver:
+    image: ghcr.io/gauravsuman007/camoufox-turnstile-solver:latest
+    container_name: plab-seeder-tscale-turnstile
+    # The image hardcodes `uvicorn ... --port 8000`, but port 8000 in this
+    # shared netns is already taken by pornolab-seeder's own uvicorn --
+    # override the command to bind 8193 instead of colliding.
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8193"]
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8193/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
 
 volumes:
   tailscale-state:

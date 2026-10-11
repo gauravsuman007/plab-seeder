@@ -106,6 +106,10 @@ services:
       SELF_URL: http://localhost:8000
       APP_PASSWORD: ${APP_PASSWORD:-}
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      # Shares this stack's netns (below), so the camoufox browser that
+      # drives Tuta/registration signup also egresses through whatever
+      # exit node is selected.
+      TURNSTILE_SIDECAR_URL: http://localhost:8193
     volumes:
       - ./data:/data
       - tailscale-socket:/var/run/tailscale:ro
@@ -120,6 +124,25 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
+
+  turnstile-solver:
+    image: ghcr.io/gauravsuman007/camoufox-turnstile-solver:latest
+    container_name: turnstile-solver
+    # The image hardcodes `uvicorn ... --port 8000`, but port 8000 in this
+    # shared netns is already taken by pornolab-seeder's own uvicorn --
+    # override the command to bind 8193 instead of colliding.
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8193"]
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8193/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
 
 volumes:
   tailscale-state:

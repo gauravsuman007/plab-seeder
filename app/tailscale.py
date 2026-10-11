@@ -134,9 +134,18 @@ async def login() -> dict:
 
 
 async def set_exit_node(node_id: str | None) -> None:
+    """`node_id` is the peer's nodekey (what `status()` and the UI dropdown
+    use as a stable id), but `tailscale set --exit-node` only accepts an IP
+    or a peer hostname, not a nodekey -- resolve it via `status()` first."""
     if not available():
         raise TailscaleError("tailscale socket not found -- is the tailscale sidecar running?")
-    args = ["set", f"--exit-node={node_id}", "--exit-node-allow-lan-access"] if node_id else ["set", "--exit-node="]
+    target = None
+    if node_id:
+        st = await status()
+        target = next((p["name"] for p in st.get("exit_nodes", []) if p["id"] == node_id), None)
+        if not target:
+            raise TailscaleError(f"no known exit-node peer with id {node_id!r}")
+    args = ["set", f"--exit-node={target}", "--exit-node-allow-lan-access"] if target else ["set", "--exit-node="]
     rc, out, err = await _run(*args)
     if rc != 0:
         raise TailscaleError(err.strip() or out.strip() or "tailscale set failed")
