@@ -193,12 +193,21 @@ def _rand_login(n: int = 12) -> str:
 
 
 def _rand_password(n: int = 16) -> str:
-    chars = _string.ascii_letters + _string.digits + "!@#$"
+    """Letters + digits only. Symbols like @/#/$ sit at DIFFERENT physical
+    keyboard positions across layouts (US vs. German etc.) -- camoufox's
+    keyboard.type() simulates real keystrokes, so a password typed under one
+    layout can come out as a different string than it looks like, producing
+    "Invalid login credentials" on every later login even though the on-page
+    input_value() showed the right characters the whole time (confirmed live
+    2026-10-11: a password containing "@@" created an account that could
+    never log back in). Alphanumeric-only sidesteps the whole class of bug.
+    """
+    chars = _string.ascii_letters + _string.digits
     pw = list(_random.choices(chars, k=n))
     pw[0] = _random.choice(_string.ascii_uppercase)
     pw[1] = _random.choice(_string.ascii_lowercase)
     pw[2] = _random.choice(_string.digits)
-    pw[3] = _random.choice("!@#$")
+    pw[3] = _random.choice(_string.digits)
     _random.shuffle(pw)
     return "".join(pw)
 
@@ -329,6 +338,14 @@ async def tuta_inbox(req: TutaInboxRequest) -> TutaInboxResponse:
                     login_btn = page.locator('button:has-text("Login")').first
                 await login_btn.click()
                 await page.wait_for_timeout(6000)
+
+                # Fail fast on bad credentials instead of silently polling an
+                # empty inbox list until max_timeout (that masked a real bug
+                # here on 2026-10-11 -- see _rand_password()'s docstring).
+                if "login" in page.url:
+                    err_text = await page.evaluate("document.body.innerText")
+                    if "Invalid login" in err_text or "invalid" in err_text.lower():
+                        return TutaInboxResponse(ok=False, error="invalid Tuta login credentials")
 
                 # Verified selectors (2026-10-11): rows are <li class="list-row">,
                 # the open-email reading pane is <div class="mail-viewer">.
