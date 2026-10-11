@@ -379,3 +379,69 @@ async def tuta_inbox(req: TutaInboxRequest) -> TutaInboxResponse:
         except Exception as e:                                           # noqa: BLE001
             log.exception("tuta/inbox failed")
             return TutaInboxResponse(ok=False, error=f"{type(e).__name__}: {e}")
+
+
+class TutaListRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TutaListResponse(BaseModel):
+    ok: bool
+    messages: list[dict[str, str]] = []
+    error: str = ""
+
+
+@app.post("/tuta/list", response_model=TutaListResponse)
+async def tuta_list(req: TutaListRequest) -> TutaListResponse:
+    """One-shot inbox listing (subject + sender) for the owner to eyeball
+    from the app's UI -- unlike /tuta/inbox this doesn't poll or wait, it
+    just logs in once and reports whatever's there right now."""
+    from camoufox.async_api import AsyncCamoufox
+
+    async with _solver_lock:
+        try:
+            async with AsyncCamoufox(
+                headless="virtual", geoip=False, humanize=True, exclude_addons=["UBO"],
+            ) as b:
+                page = await b.new_page()
+                await page.goto("https://app.tuta.com/login", wait_until="load", timeout=30000)
+                await page.wait_for_timeout(3000)
+
+                inputs = await page.query_selector_all("input")
+                user_el, pw_el = None, None
+                for el in inputs:
+                    t = await el.get_attribute("type")
+                    if t == "password":
+                        pw_el = pw_el or el
+                    elif t not in ("checkbox", "radio"):
+                        user_el = user_el or el
+                if not user_el or not pw_el:
+                    return TutaListResponse(ok=False, error="login form fields not found")
+
+                await user_el.click()
+                await page.keyboard.type(req.email, delay=40)
+                await pw_el.click()
+                await page.keyboard.type(req.password, delay=40)
+                login_btn = page.locator('button:has-text("Log in")').first
+                if await login_btn.count() == 0:
+                    login_btn = page.locator('button:has-text("Login")').first
+                await login_btn.click()
+                await page.wait_for_timeout(6000)
+
+                body_text = await page.evaluate("document.body.innerText")
+                if "Invalid login" in body_text:
+                    return TutaListResponse(ok=False, error="invalid Tuta login credentials")
+
+                rows = await page.query_selector_all("li.list-row")
+                messages = []
+                for row in rows[:30]:
+                    text = (await row.inner_text()).strip()
+                    lines = [ln for ln in text.split("\n") if ln.strip()]
+                    sender = lines[0] if lines else ""
+                    subject = lines[-1] if len(lines) > 1 else ""
+                    messages.append({"from": sender, "subject": subject})
+                return TutaListResponse(ok=True, messages=messages)
+        except Exception as e:                                           # noqa: BLE001
+            log.exception("tuta/list failed")
+            return TutaListResponse(ok=False, error=f"{type(e).__name__}: {e}")

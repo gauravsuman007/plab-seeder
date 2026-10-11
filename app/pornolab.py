@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import time
+from pathlib import Path
 
 import httpx
 
@@ -103,7 +104,7 @@ class CaptchaRequired(PornolabError):
 
 
 class Pornolab:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, cookies_path: Path | None = None):
         self.base = base_url.rstrip("/")
         self.client = httpx.AsyncClient(
             headers={"User-Agent": UA, "Accept-Language": "ru,en;q=0.8"},
@@ -114,12 +115,16 @@ class Pornolab:
         self._last = 0.0
         self.uid: int | None = None
         self.pending_captcha: parsing.LoginForm | None = None
+        # Defaults to the single-account cookie file for backward compatibility;
+        # multi-account callers pass a per-account path so sessions don't clobber
+        # each other (see Engine construction in app/main.py).
+        self._cookies_path = cookies_path or COOKIES
         self._load_cookies()
 
     # -- plumbing ----------------------------------------------------------- #
     def _load_cookies(self) -> None:
         try:
-            data = json.loads(COOKIES.read_text())
+            data = json.loads(self._cookies_path.read_text())
         except (OSError, ValueError):
             return
         for c in data.get("cookies", []):
@@ -128,14 +133,14 @@ class Pornolab:
 
     def _save_cookies(self) -> None:
         cookies = [{"name": c.name, "value": c.value, "domain": c.domain} for c in self.client.cookies.jar]
-        COOKIES.parent.mkdir(parents=True, exist_ok=True)
-        COOKIES.write_text(json.dumps({"cookies": cookies, "uid": self.uid}))
-        COOKIES.chmod(0o600)
+        self._cookies_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cookies_path.write_text(json.dumps({"cookies": cookies, "uid": self.uid}))
+        self._cookies_path.chmod(0o600)
 
     def clear_session(self) -> None:
         self.client.cookies.clear()
         self.uid = None
-        COOKIES.unlink(missing_ok=True)
+        self._cookies_path.unlink(missing_ok=True)
 
     async def _request(self, method: str, path: str, **kw) -> httpx.Response:
         async with self._lock:

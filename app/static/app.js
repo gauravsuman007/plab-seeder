@@ -8,6 +8,17 @@
 const POLL_MS = 5000;
 let lastState = null;
 let loginCreds = null;     // {username, password, remember} kept only to resubmit after a captcha
+let currentAccountId = parseInt(localStorage.getItem("accountId") || "1", 10);
+let accountsCache = [];
+
+// Fields that live in the GLOBAL settings store (app/store.py GlobalSettings) —
+// everything else in #settingsForm is a per-account field routed to
+// /api/accounts/{id}/settings instead.
+const GLOBAL_FIELD_NAMES = new Set([
+  "qbit_url", "qbit_username", "qbit_password", "gateway_url", "self_url",
+  "pornolab_url", "email_factory_provider", "gmx_provider",
+  "sms_activate_api_key", "mailru_domain",
+]);
 
 // -------------------------------------------------------------------- utils
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -83,8 +94,41 @@ function initTabs() {
       $(`#panel-${btn.dataset.tab}`).classList.add("active");
       if (btn.dataset.tab === "settings") loadSettings();
       if (btn.dataset.tab === "events") loadEvents();
+      if (btn.dataset.tab === "accounts") loadAccounts();
       if (btn.dataset.tab === "dashboard" && lastState?.logged_in) loadHistory();
     });
+  });
+}
+
+// ----------------------------------------------------------- account switcher
+async function loadAccountSwitcher() {
+  accountsCache = await api("GET", "/api/accounts");
+  const sel = $("#accountSwitcher");
+  if (!accountsCache.some(a => a.id === currentAccountId)) {
+    currentAccountId = accountsCache[0] ? accountsCache[0].id : 1;
+  }
+  sel.innerHTML = accountsCache.map(a =>
+    `<option value="${a.id}">${escapeHtml(a.label)}${a.logged_in ? "" : " (logged out)"}</option>`
+  ).join("") + `<option value="__new__">+ New account…</option>`;
+  sel.value = String(currentAccountId);
+}
+
+function initAccountSwitcher() {
+  $("#accountSwitcher").addEventListener("change", async (ev) => {
+    if (ev.target.value === "__new__") {
+      ev.target.value = String(currentAccountId);   // revert the select
+      $$(".tab").forEach(b => b.classList.remove("active"));
+      $$(".panel").forEach(p => p.classList.remove("active"));
+      $('.tab[data-tab="register"]').classList.add("active");
+      $("#panel-register").classList.add("active");
+      return;
+    }
+    currentAccountId = parseInt(ev.target.value, 10);
+    localStorage.setItem("accountId", String(currentAccountId));
+    await refreshState();
+    if ($(".tab.active")?.dataset.tab === "settings") loadSettings();
+    if ($(".tab.active")?.dataset.tab === "events") loadEvents();
+    if ($(".tab.active")?.dataset.tab === "dashboard") loadHistory();
   });
 }
 
@@ -187,7 +231,7 @@ async function submitLogin(creds) {
   msg.textContent = "Logging in…";
   msg.className = "form-msg";
   try {
-    const res = await api("POST", "/api/pornolab/login", creds);
+    const res = await api("POST", "/api/pornolab/login", { ...creds, account_id: currentAccountId });
     if (res.ok) {
       msg.textContent = "Logged in.";
       msg.className = "form-msg ok";
@@ -223,14 +267,14 @@ function initLogin() {
 
   $("#logoutBtn").addEventListener("click", async () => {
     if (!confirm("Log out of PornoLab? The stored password will be cleared.")) return;
-    await api("POST", "/api/pornolab/logout");
+    await api("POST", "/api/pornolab/logout", { account_id: currentAccountId });
     await refreshState();
   });
 
   $("#refreshProfileBtn").addEventListener("click", async (ev) => {
     ev.target.disabled = true;
     try {
-      await api("POST", "/api/profile/refresh");
+      await api("POST", "/api/profile/refresh", { account_id: currentAccountId });
       await refreshState();
       loadHistory();
       toast("Profile refreshed", "ok");
@@ -243,7 +287,7 @@ function initLogin() {
 
   $("#autoToggle").addEventListener("change", async (ev) => {
     try {
-      await api("POST", "/api/auto", { enabled: ev.target.checked });
+      await api("POST", "/api/auto", { enabled: ev.target.checked, account_id: currentAccountId });
       toast(`Auto-seed ${ev.target.checked ? "enabled" : "disabled"}`, "ok");
       await refreshState();
     } catch (e) {
@@ -255,14 +299,15 @@ function initLogin() {
   $("#fakeUploadToggle").addEventListener("change", async (ev) => {
     if (ev.target.checked && !confirm(
       "This makes the tracker believe you are uploading even when qBittorrent " +
-      "isn't seeding. PornoLab may detect this and ban the account. " +
-      "Enable anyway?"
+      "isn't seeding. PornoLab may detect this and ban the account. It only " +
+      "takes effect once this account has a real download on record (added " +
+      "automatically if auto-seed is also on). Enable anyway?"
     )) {
       ev.target.checked = false;
       return;
     }
     try {
-      await api("POST", "/api/settings", { fake_upload_credit: ev.target.checked });
+      await api("POST", `/api/accounts/${currentAccountId}/settings`, { fake_upload_credit: ev.target.checked });
       const msg = $("#fakeUploadMsg");
       msg.textContent = ev.target.checked ? "Enabled." : "Disabled.";
       msg.className = "form-msg " + (ev.target.checked ? "warn" : "ok");
@@ -280,7 +325,7 @@ function initLogin() {
     const msg = $("#fakeUploadMsg");
     if (!rate || rate < 1) { msg.textContent = "Enter a valid rate."; msg.className = "form-msg err"; return; }
     try {
-      await api("POST", "/api/settings", { fake_upload_mb_per_hour: rate });
+      await api("POST", `/api/accounts/${currentAccountId}/settings`, { fake_upload_mb_per_hour: rate });
       msg.textContent = "Rate saved.";
       msg.className = "form-msg ok";
       await refreshState();
@@ -301,7 +346,7 @@ function initLogin() {
       return;
     }
     try {
-      await api("POST", "/api/guard-override", { enabled: ev.target.checked });
+      await api("POST", "/api/guard-override", { enabled: ev.target.checked, account_id: currentAccountId });
       toast(`Download guard override ${ev.target.checked ? "enabled" : "disabled"}`, ev.target.checked ? "warn" : "ok");
       await refreshState();
     } catch (e) {
@@ -349,7 +394,7 @@ function renderCandidates(s) {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
-        await api("POST", `/api/candidates/${btn.dataset.add}/add`);
+        await api("POST", `/api/candidates/${btn.dataset.add}/add`, { account_id: currentAccountId });
         toast("Added to qBittorrent", "ok");
         await refreshState();
       } catch (e) {
@@ -369,7 +414,7 @@ function initCandidates() {
     ev.target.disabled = true;
     ev.target.textContent = "Scanning…";
     try {
-      await api("POST", "/api/scan");
+      await api("POST", "/api/scan", { account_id: currentAccountId });
       await refreshState();
       toast("Scan complete", "ok");
     } catch (e) {
@@ -425,10 +470,10 @@ function renderTorrents(s) {
   $$("#torrentsTable [data-act]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const { act, hash } = btn.dataset;
-      let body;
+      let body = { account_id: currentAccountId };
       if (act === "remove") {
         if (!confirm("Remove this torrent? Downloaded files will be deleted too.")) return;
-        body = { delete_files: true };
+        body.delete_files = true;
       }
       btn.disabled = true;
       try {
@@ -445,10 +490,14 @@ function renderTorrents(s) {
 
 // ----------------------------------------------------------------- settings
 const LIST_FIELDS = new Set(["exclude_forums"]);
-const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password"]);
+const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password", "sms_activate_api_key"]);
 
 async function loadSettings() {
-  const s = await api("GET", "/api/settings");
+  const [g, a] = await Promise.all([
+    api("GET", "/api/settings"),
+    api("GET", `/api/accounts/${currentAccountId}/settings`),
+  ]);
+  const s = { ...g, ...a };
   const form = $("#settingsForm");
   for (const el of form.elements) {
     if (!el.name || !(el.name in s)) continue;
@@ -463,16 +512,22 @@ function initSettings() {
   $("#settingsForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const form = ev.target;
-    const payload = {};
+    const globalPayload = {}, accountPayload = {};
     for (const el of form.elements) {
       if (!el.name) continue;
-      if (el.type === "checkbox") payload[el.name] = el.checked;
+      let v;
+      if (el.type === "checkbox") v = el.checked;
       else if (SECRET_FIELDS.has(el.name) && el.value === "") continue;  // blank = unchanged
-      else payload[el.name] = el.value;
+      else v = el.value;
+      (GLOBAL_FIELD_NAMES.has(el.name) ? globalPayload : accountPayload)[el.name] = v;
     }
     const msg = $("#settingsMsg");
     try {
-      await api("POST", "/api/settings", payload);
+      const calls = [];
+      if (Object.keys(globalPayload).length) calls.push(api("POST", "/api/settings", globalPayload));
+      if (Object.keys(accountPayload).length)
+        calls.push(api("POST", `/api/accounts/${currentAccountId}/settings`, accountPayload));
+      await Promise.all(calls);
       msg.textContent = "Saved.";
       msg.className = "form-msg ok";
       await loadSettings();
@@ -486,7 +541,7 @@ function initSettings() {
 
 // ------------------------------------------------------------------- events
 async function loadEvents() {
-  const events = await api("GET", "/api/events?limit=300");
+  const events = await api("GET", `/api/events?limit=300&account_id=${currentAccountId}`);
   const list = $("#eventsList");
   if (!events.length) {
     list.innerHTML = `<li class="empty">No events yet.</li>`;
@@ -508,7 +563,7 @@ function initEvents() {
 // ------------------------------------------------------------------- history
 async function loadHistory() {
   const days = Number($("#historyRange").value);
-  const points = await api("GET", `/api/history?days=${days}`);
+  const points = await api("GET", `/api/history?days=${days}&account_id=${currentAccountId}`);
   drawHistory(points);
 }
 
@@ -713,6 +768,99 @@ function initRegister() {
 }
 
 
+// ------------------------------------------------------------- full automation
+function initFullAuto() {
+  const btn = $("#fullAutoBtn");
+  const statusEl = $("#fullAutoStatus");
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = "Creating email, registering PornoLab account, solving captcha " +
+      "(retrying up to 10×)… this can take a couple of minutes.";
+    try {
+      const res = await api("POST", "/api/register/auto", {});
+      statusEl.textContent = res.activated
+        ? `✓ Registered and activated: ${res.username} (${res.email})`
+        : `✓ Registered: ${res.username} (${res.email}) — activation pending, ` +
+          `check the Accounts tab to view the inbox or finish by hand.`;
+      currentAccountId = res.account_id;
+      localStorage.setItem("accountId", String(currentAccountId));
+      await loadAccountSwitcher();
+      await refreshState();
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// ----------------------------------------------------------------- accounts
+async function loadAccounts() {
+  const accounts = await api("GET", "/api/accounts");
+  accountsCache = accounts;
+  const tbody = $("#accountsTable tbody");
+  if (!accounts.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No accounts yet — use Register → Full automation.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = accounts.map(a => `
+    <tr data-account-row="${a.id}">
+      <td>${escapeHtml(a.label)}</td>
+      <td>${escapeHtml(a.pornolab_username || "—")}</td>
+      <td class="pw-cell" data-field="pornolab_password">${a.pornolab_username ? "••••••••" : "—"}</td>
+      <td>${escapeHtml(a.email_address || "—")}</td>
+      <td class="pw-cell" data-field="email_password">${a.email_address ? "••••••••" : "—"}</td>
+      <td>${a.logged_in ? `<span class="badge good">logged in</span>` : `<span class="badge">logged out</span>`}
+          ${a.first_download_at ? "" : `<span class="badge warn" title="No real download yet — fake-upload-credit stays off until one happens">no download yet</span>`}</td>
+      <td class="row-actions">
+        <button class="btn small" data-reveal="${a.id}">Show</button>
+        ${a.email_provider === "tuta" ? `<button class="btn small" data-inbox="${a.id}">Check inbox</button>` : ""}
+      </td>
+    </tr>
+  `).join("");
+
+  $$("#accountsTable [data-reveal]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.reveal;
+      const row = $(`tr[data-account-row="${id}"]`);
+      try {
+        const creds = await api("GET", `/api/accounts/${id}/credentials`);
+        row.querySelector('[data-field="pornolab_password"]').textContent = creds.pornolab_password || "—";
+        row.querySelector('[data-field="email_password"]').textContent = creds.email_password || "—";
+        btn.textContent = "Shown";
+        btn.disabled = true;
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    });
+  });
+
+  $$("#accountsTable [data-inbox]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Loading…";
+      try {
+        const res = await api("GET", `/api/email/inbox?account_id=${btn.dataset.inbox}`);
+        const list = (res.messages || []).map(m =>
+          `• ${escapeHtml(m.subject || "(no subject)")} — ${escapeHtml(m.from || "")}`
+        ).join("\n") || "(inbox empty)";
+        alert(list);
+      } catch (e) {
+        toast(e.message, "err");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Check inbox";
+      }
+    });
+  });
+}
+
+function initAccounts() {
+  $("#refreshAccountsBtn").addEventListener("click", loadAccounts);
+}
+
 // ----------------------------------------------------------- mail.ru factory
 function initEmailFactory() {
   const btn      = $("#regEmailBtn");
@@ -745,7 +893,7 @@ let stateSeq = 0;
 async function refreshState() {
   const seq = ++stateSeq;
   try {
-    const s = await api("GET", "/api/state");
+    const s = await api("GET", `/api/state?account_id=${currentAccountId}`);
     if (seq !== stateSeq) return;   // a newer request already landed -- drop this stale one
     lastState = s;
     renderPills(s);
@@ -764,14 +912,18 @@ function initPoll() {
 }
 
 // --------------------------------------------------------------------- init
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   initTabs();
+  initAccountSwitcher();
   initLogin();
   initCandidates();
   initSettings();
   initEvents();
+  initAccounts();
   initHistory();
   initRegister();
   initEmailFactory();
+  initFullAuto();
+  await loadAccountSwitcher();
   initPoll();
 });

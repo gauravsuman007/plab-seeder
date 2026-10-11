@@ -12,7 +12,6 @@ from .bencode import BencodeError, torrent_meta, redirect_announce
 from .parsing import Profile, Release
 from .pornolab import CaptchaRequired, LimitReached, NotLoggedIn, Pornolab, PornolabError
 from .qbit import Qbit, QbitError
-from .store import DB, SettingsStore
 
 log = logging.getLogger("seeder")
 
@@ -29,11 +28,16 @@ RECOVERY_MAX_BYTES = 4 * 1024**3
 
 
 class Engine:
-    def __init__(self, store: SettingsStore, db: DB):
+    def __init__(self, store, db, cookies_path=None):
+        """`store`/`db` need only the SettingsStore/DB interface (`.settings`,
+        `.update()` / `.meta()`, `.event()`, etc.) — in the multi-account app
+        these are AccountSettingsHandle/AccountDB instances bound to one
+        account, but Engine itself has no account concept beyond that."""
         self.store = store
         self.db = db
+        self._cookies_path = cookies_path
         s = store.settings
-        self.pl = Pornolab(s.pornolab_url)
+        self.pl = Pornolab(s.pornolab_url, cookies_path)
         self.qb = Qbit(s.qbit_url, s.qbit_username, s.qbit_password)
         self.tasks: list[asyncio.Task] = []
         self._decide_lock = asyncio.Lock()
@@ -91,7 +95,7 @@ class Engine:
         old_qb, old_pl = self.qb, self.pl
         self.qb = Qbit(s.qbit_url, s.qbit_username, s.qbit_password)
         if old_pl.base != s.pornolab_url.rstrip("/"):
-            self.pl = Pornolab(s.pornolab_url)
+            self.pl = Pornolab(s.pornolab_url, self._cookies_path)
             asyncio.create_task(old_pl.close())
         asyncio.create_task(old_qb.close())
 
@@ -283,6 +287,20 @@ class Engine:
                 return
             if not self.profile_at or time.time() - self.profile_at > 3 * self.s.profile_interval_min * 60:
                 return              # never decide on stale numbers
+            # fake_upload_credit requires a real download to exist first (the
+            # owner confirmed this should only auto-trigger with auto-seed
+            # already on, which this branch guarantees). Grab the smallest
+            # fitting candidate once, ahead of the normal picker, so a
+            # brand-new account doesn't start uploading with zero history.
+            if (self.s.fake_upload_credit and hasattr(self.db, "has_first_download")
+                    and not self.db.has_first_download()):
+                fits = [c for c in self.candidates if c.fits]
+                if fits:
+                    bootstrap = min(fits, key=lambda c: c.release.size)
+                    try:
+                        await self.add(bootstrap.release.topic_id, reason="fake-upload-credit bootstrap")
+                    except PornolabError:
+                        pass
             active = sum(1 for t in self.torrents if (t.get("progress") or 0) < 1)
             slots = min(self.budget()["left"], max(0, self.s.max_active_downloads - active))
             if slots <= 0:
@@ -344,6 +362,7 @@ class Engine:
             raise ValueError("unknown topic: rescan first")
         if topic_id in self.db.known_topics():
             raise ValueError("already added")
+        is_first_ever = not self.db.known_topics()
         if not self.profile:
             raise ValueError("no PornoLab profile yet: log in first")
         if self.budget()["left"] <= 0:
@@ -362,8 +381,15 @@ class Engine:
             raise
         self.db.record_fetch(topic_id, True)
 
+        minted_tokens: list[str] = []
+
+        def _register_and_track(url: str) -> str:
+            token = self.register_announce(url)
+            minted_tokens.append(token)
+            return token
+
         try:
-            data = redirect_announce(data, self.s.self_url, self.register_announce)
+            data = redirect_announce(data, self.s.self_url, _register_and_track)
             meta = torrent_meta(data)
         except BencodeError as e:
             raise ValueError(f"PornoLab sent an unreadable .torrent: {e}") from e
@@ -382,6 +408,13 @@ class Engine:
                             last_uploaded=0, last_upload_change=time.time())
         self.db.event(f"Added ({reason}) '{release.title}' — {limits.fmt(meta['size'])}, "
                       f"{release.seeders} seeders / {release.leechers} leechers")
+        if is_first_ever and minted_tokens and hasattr(self.db, "set_first_download"):
+            # Marks this as the account's download-history bootstrap: the
+            # announce proxy ramps a fake ~1GB downloaded total for this one
+            # torrent's first hour (instead of the usual downloaded=0), and
+            # fake_upload_credit stays off until this has happened at all —
+            # see app/main.py's announce_proxy and _bootstrap_downloaded_bytes.
+            self.db.set_first_download(minted_tokens[0])
         self._rerank()
         return meta
 
@@ -423,9 +456,6 @@ class Engine:
             return {"ok": False, "error": str(e)}
         self.store.update({"pornolab_username": username,
                            "pornolab_password": password if remember else ""})
-        if not remember:
-            self.store.settings.pornolab_password = ""
-            self.store.save()
         self.logged_in = True
         self.db.event(f"Logged in to PornoLab as {username}")
         await self.refresh_profile()
@@ -437,8 +467,6 @@ class Engine:
         self.logged_in = False
         self.profile = None
         self.store.update({"pornolab_password": ""})
-        self.store.settings.pornolab_password = ""
-        self.store.save()
         self.db.event("Logged out of PornoLab")
 
     # ------------------------------------------------------------------ #

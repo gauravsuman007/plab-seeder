@@ -12,6 +12,7 @@
     <span class="brand-dot"></span>
     <h1>pornolab-seeder</h1>
   </div>
+  <select id="accountSwitcher" title="Active account"></select>
   <div class="pills" id="statusPills"></div>
   <label class="auto-toggle">
     <input type="checkbox" id="autoToggle">
@@ -24,6 +25,7 @@
   <button class="tab" data-tab="candidates">Candidates</button>
   <button class="tab" data-tab="torrents">Torrents</button>
   <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="accounts">Accounts</button>
   <button class="tab" data-tab="events">Events</button>
   <button class="tab" data-tab="register">Register</button>
 </nav>
@@ -314,10 +316,45 @@
     </form>
   </section>
 
+  <!-- ============================ ACCOUNTS ============================ -->
+  <section class="panel" id="panel-accounts">
+    <div class="card">
+      <div class="card-head">
+        <h2>Accounts</h2>
+        <button class="btn small" id="refreshAccountsBtn">Refresh</button>
+      </div>
+      <p class="muted small">Every PornoLab + email account pair this app has ever created. Credentials
+         are masked by default — click "Show" to reveal them for copying. Accounts are never deleted here.</p>
+      <div class="table-wrap">
+        <table class="table" id="accountsTable">
+          <thead>
+            <tr>
+              <th>Label</th><th>PornoLab login</th><th>PornoLab password</th>
+              <th>Email</th><th>Email password</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
   <!-- ============================ REGISTER ============================ -->
   <section class="panel" id="panel-register">
     <div class="card" style="max-width:540px">
-      <h2>Register a new PornoLab account</h2>
+      <h2>Full automation</h2>
+      <p class="muted small">Creates an email account, registers a new PornoLab account with it, and
+         (for Tuta) activates it automatically — retrying the captcha up to 10 times if needed. The
+         new account is added to the switcher above and the Accounts tab even if automatic activation
+         doesn't complete; check that account's email inbox to finish by hand if so.</p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="fullAutoBtn">Create &amp; register a new account</button>
+      </div>
+      <div id="fullAutoStatus" class="muted small" hidden></div>
+    </div>
+
+    <div class="card" style="max-width:540px">
+      <h2>Manual registration</h2>
       <p class="muted small">Fill in the form, then click "Get captcha" to load the verification
          image. Enter the code and submit. An activation email will be sent to the address you provide.</p>
       <p class="muted small" style="color:var(--warn,#b45309)">⚠ PornoLab blocks all disposable/temporary email services.
