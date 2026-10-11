@@ -100,11 +100,23 @@ async def login() -> dict:
     # prior one of ours) is restated -- otherwise it exits immediately with
     # "requires mentioning all non-default flags" instead of printing a
     # login URL. Restate the full set containerboot/the compose file apply
-    # (--accept-dns=false, --netfilter-mode=off) rather than just
-    # --accept-routes, so this works regardless of what's already set.
+    # (--accept-dns=false, --netfilter-mode=off, --accept-routes=false).
+    #
+    # --accept-routes=false is deliberate, not just "restate the default":
+    # this node only ever *consumes* an exit node (see the compose file),
+    # it never needs subnet routes from other tailnet peers. An earlier
+    # version of this call passed bare `--accept-routes` (true), which
+    # pulled in whatever subnet route any other peer happens to advertise
+    # (e.g. one overlapping the LAN this host is on). That installed a
+    # competing route in this container's netns, so return traffic for
+    # inbound WebUI connections got sent out via tailscale0 instead of back
+    # out the LAN interface -- the WebUI went unreachable the moment login
+    # completed, with no exit node ever selected (confirmed live 2026-10-11
+    # on plab-register, same root cause as this app's earlier crash-loop
+    # bug). Keep this false.
     proc = await asyncio.create_subprocess_exec(
         TS_BIN, f"--socket={TS_SOCKET}", "up",
-        "--accept-routes", "--accept-dns=false", "--netfilter-mode=off",
+        "--accept-routes=false", "--accept-dns=false", "--netfilter-mode=off",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     loop = asyncio.get_running_loop()
