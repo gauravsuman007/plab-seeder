@@ -11,15 +11,6 @@ let loginCreds = null;     // {username, password, remember} kept only to resubm
 let currentAccountId = parseInt(localStorage.getItem("accountId") || "1", 10);
 let accountsCache = [];
 
-// Fields that live in the GLOBAL settings store (app/store.py GlobalSettings) —
-// everything else in #settingsForm is a per-account field routed to
-// /api/accounts/{id}/settings instead.
-const GLOBAL_FIELD_NAMES = new Set([
-  "qbit_url", "qbit_username", "qbit_password", "gateway_url", "self_url",
-  "pornolab_url", "email_factory_provider", "gmx_provider",
-  "sms_activate_api_key", "mailru_domain",
-]);
-
 // -------------------------------------------------------------------- utils
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -489,16 +480,13 @@ function renderTorrents(s) {
 }
 
 // ----------------------------------------------------------------- settings
+// Two physically separate forms now (global infra vs. this account's own
+// rules), matching app/store.py's GlobalSettings/AccountSettings split —
+// no more guessing which endpoint a field belongs to.
 const LIST_FIELDS = new Set(["exclude_forums"]);
 const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password", "sms_activate_api_key"]);
 
-async function loadSettings() {
-  const [g, a] = await Promise.all([
-    api("GET", "/api/settings"),
-    api("GET", `/api/accounts/${currentAccountId}/settings`),
-  ]);
-  const s = { ...g, ...a };
-  const form = $("#settingsForm");
+function fillForm(form, s) {
   for (const el of form.elements) {
     if (!el.name || !(el.name in s)) continue;
     if (SECRET_FIELDS.has(el.name)) { el.value = ""; continue; }  // never prefill secrets
@@ -508,26 +496,48 @@ async function loadSettings() {
   }
 }
 
+function formPayload(form) {
+  const payload = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (el.type === "checkbox") payload[el.name] = el.checked;
+    else if (SECRET_FIELDS.has(el.name) && el.value === "") continue;  // blank = unchanged
+    else payload[el.name] = el.value;
+  }
+  return payload;
+}
+
+async function loadSettings() {
+  const label = accountsCache.find(a => a.id === currentAccountId)?.label;
+  $("#settingsAccountLabel").textContent = label ? `— ${label}` : "";
+  const [g, a] = await Promise.all([
+    api("GET", "/api/settings"),
+    api("GET", `/api/accounts/${currentAccountId}/settings`),
+  ]);
+  fillForm($("#globalSettingsForm"), g);
+  fillForm($("#accountSettingsForm"), a);
+}
+
 function initSettings() {
-  $("#settingsForm").addEventListener("submit", async (ev) => {
+  $("#globalSettingsForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const form = ev.target;
-    const globalPayload = {}, accountPayload = {};
-    for (const el of form.elements) {
-      if (!el.name) continue;
-      let v;
-      if (el.type === "checkbox") v = el.checked;
-      else if (SECRET_FIELDS.has(el.name) && el.value === "") continue;  // blank = unchanged
-      else v = el.value;
-      (GLOBAL_FIELD_NAMES.has(el.name) ? globalPayload : accountPayload)[el.name] = v;
-    }
-    const msg = $("#settingsMsg");
+    const msg = $("#globalSettingsMsg");
     try {
-      const calls = [];
-      if (Object.keys(globalPayload).length) calls.push(api("POST", "/api/settings", globalPayload));
-      if (Object.keys(accountPayload).length)
-        calls.push(api("POST", `/api/accounts/${currentAccountId}/settings`, accountPayload));
-      await Promise.all(calls);
+      await api("POST", "/api/settings", formPayload(ev.target));
+      msg.textContent = "Saved.";
+      msg.className = "form-msg ok";
+      await loadSettings();
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "form-msg err";
+    }
+  });
+
+  $("#accountSettingsForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = $("#accountSettingsMsg");
+    try {
+      await api("POST", `/api/accounts/${currentAccountId}/settings`, formPayload(ev.target));
       msg.textContent = "Saved.";
       msg.className = "form-msg ok";
       await loadSettings();

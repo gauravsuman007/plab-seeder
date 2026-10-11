@@ -118,6 +118,9 @@ main { padding: 20px; max-width: 1280px; margin: 0 auto; }
 .checkbox-row { flex-direction: row !important; align-items: center; gap: 8px !important; grid-column: 1 / -1; }
 .checkbox-row input { accent-color: var(--accent); width: 15px; height: 15px; }
 
+.settings-section-head { margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.settings-section-head:first-child { margin-top: 0; }
+
 .form-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .form-msg { font-size: 12px; color: var(--muted); }
 .form-msg.ok { color: var(--good); }

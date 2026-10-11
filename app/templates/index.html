@@ -199,24 +199,24 @@
 
   <!-- ============================ SETTINGS ============================ -->
   <section class="panel" id="panel-settings">
-    <form id="settingsForm">
+
+    <h2 class="settings-section-head">Global <span class="muted small">— shared by every account</span></h2>
+    <form id="globalSettingsForm">
       <div class="grid-2">
 
         <div class="card">
-          <h2>qBittorrent</h2>
+          <h2>qBittorrent connection</h2>
           <div class="form-grid">
             <label>WebUI URL <input type="text" name="qbit_url"></label>
             <label>Username <input type="text" name="qbit_username" autocomplete="off"></label>
             <label>Password <input type="password" name="qbit_password" autocomplete="new-password"
                                     placeholder="•••••••• (unchanged)"></label>
-            <label>Category <input type="text" name="qbit_category"></label>
-            <label>Save path <input type="text" name="qbit_save_path"></label>
             <label>Gateway URL <input type="text" name="gateway_url"></label>
           </div>
         </div>
 
         <div class="card">
-          <h2>PornoLab</h2>
+          <h2>PornoLab site</h2>
           <div class="form-grid">
             <label>Site URL <input type="text" name="pornolab_url"></label>
           </div>
@@ -225,7 +225,7 @@
 
         <div class="card">
           <h2>Email account factory</h2>
-          <p class="muted small">Powers the "New email" button on the Register tab.
+          <p class="muted small">Powers "Full automation" and "New email" on the Register tab.
              Tuta is the only option that's actually phone-free: no phone, no
              captcha. GMX/web.de and gmx.net both require a phone at the final
              registration step despite initial appearances — kept only in case
@@ -256,6 +256,27 @@
               <input type="password" name="sms_activate_api_key" autocomplete="new-password"
                      placeholder="•••••••• (unchanged)">
             </label>
+          </div>
+        </div>
+
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Save global settings</button>
+        <span class="form-msg" id="globalSettingsMsg"></span>
+      </div>
+    </form>
+
+    <h2 class="settings-section-head">This account <span class="muted small" id="settingsAccountLabel"></span></h2>
+    <form id="accountSettingsForm">
+      <div class="grid-2">
+
+        <div class="card">
+          <h2>qBittorrent placement</h2>
+          <p class="muted small">Keep these unique per account so torrents from different accounts
+             never collide in the same qBittorrent category/folder.</p>
+          <div class="form-grid">
+            <label>Category <input type="text" name="qbit_category"></label>
+            <label>Save path <input type="text" name="qbit_save_path"></label>
           </div>
         </div>
 
@@ -307,11 +328,26 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>Fake upload credit</h2>
+          <p class="muted small">Inflates the <code>uploaded</code> counter reported to the tracker
+             on every announce, even when qBittorrent isn't transferring data. Only takes effect once
+             this account has a real download on record (added automatically if auto-seed is also on).
+             <strong>Detection risk — owner's call.</strong>
+             The quick toggle on the Dashboard controls the same setting.</p>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" name="fake_upload_credit">
+              <span>Enable fake upload credit <strong>(ban risk — owner's call)</strong></span>
+            </label>
+            <label>Hourly rate (MB/hr) <input type="number" name="fake_upload_mb_per_hour" min="1"></label>
+          </div>
+        </div>
 
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn primary">Save settings</button>
-        <span class="form-msg" id="settingsMsg"></span>
+        <button type="submit" class="btn primary">Save account settings</button>
+        <span class="form-msg" id="accountSettingsMsg"></span>
       </div>
     </form>
   </section>
