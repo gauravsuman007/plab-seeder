@@ -235,6 +235,14 @@ create table if not exists events (
     level text,
     message text
 );
+create table if not exists emails (
+    id integer primary key autoincrement,
+    provider text not null,
+    address text not null,
+    password text not null,
+    created_at real,
+    note text default ''
+);
 """
 
 
@@ -292,6 +300,24 @@ class DB:
     def set_account_first_download(self, account_id: int, token: str) -> None:
         self.execute("update accounts set first_download_at=?, first_download_token=? where id=?",
                      (time.time(), token, account_id))
+
+    # -- emails (standalone, not yet tied to a PornoLab account) --------- #
+    def list_emails(self) -> list[dict]:
+        return self.rows("select id, provider, address, created_at, note from emails order by id desc")
+
+    def get_email(self, email_id: int) -> dict | None:
+        rows = self.rows("select * from emails where id=?", (email_id,))
+        return rows[0] if rows else None
+
+    def create_email(self, *, provider: str, address: str, password: str, note: str = "") -> int:
+        cur = self.execute(
+            "insert into emails(provider, address, password, created_at, note) values (?,?,?,?,?)",
+            (provider, address, password, time.time(), note),
+        )
+        return cur.lastrowid
+
+    def delete_email(self, email_id: int) -> None:
+        self.execute("delete from emails where id=?", (email_id,))
 
     # -- meta (baselines) ------------------------------------------------ #
     def meta(self, account_id: int, key: str) -> str | None:

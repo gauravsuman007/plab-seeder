@@ -826,31 +826,140 @@ async def email_activation(request: Request):
     return {"ok": True, "url": url}
 
 
+async def _list_inbox(provider: str, address: str, password: str) -> list[dict]:
+    """Dispatch to the right inbox-listing mechanism for a provider. Raises
+    ValueError for providers with no inbox-reading support."""
+    if provider == "tuta":
+        sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+        if not sidecar:
+            raise ValueError("TURNSTILE_SIDECAR_URL not set")
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(f"{sidecar.rstrip('/')}/tuta/list", json={"email": address, "password": password})
+            r.raise_for_status()
+            d = r.json()
+        if not d.get("ok"):
+            raise ValueError(d.get("error") or "inbox listing failed")
+        return d.get("messages", [])
+    if provider == "gmx":
+        return await _gmx.gmx_list_inbox(address, password)
+    if provider == "mailru":
+        return await _mru.mailru_list_inbox(address, password)
+    raise ValueError(f"inbox listing is not supported for provider {provider!r}")
+
+
 @app.get("/api/email/inbox")
 async def email_inbox(account_id: int):
     """List recent inbox subjects for an account's email, so the owner can
-    see whether the activation email arrived without leaving the app. Only
-    Tuta has an inbox-listing endpoint today."""
+    see whether the activation email arrived without leaving the app."""
     row = db.get_account(account_id)
     if not row:
         _fail(ValueError(f"unknown account_id {account_id}"), 404)
-    if row["email_provider"] != "tuta":
-        _fail(ValueError("inbox listing is only available for tuta accounts"))
-    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
-    if not sidecar:
-        _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
     try:
-        async with httpx.AsyncClient(timeout=90) as c:
-            r = await c.post(f"{sidecar.rstrip('/')}/tuta/list", json={
-                "email": row["email_address"], "password": row["email_password"],
-            })
-            r.raise_for_status()
-            d = r.json()
-    except httpx.HTTPError as e:
+        messages = await _list_inbox(row["email_provider"], row["email_address"], row["email_password"])
+    except ValueError as e:
         _fail(e, 502)
-    if not d.get("ok"):
-        _fail(ValueError(d.get("error") or "inbox listing failed"), 502)
-    return {"ok": True, "messages": d.get("messages", [])}
+    return {"ok": True, "messages": messages}
+
+
+# --------------------------------------------------------------------------- #
+# standalone email registry -- create/inspect/discard email accounts across
+# all the providers we support, independent of any PornoLab registration.
+# --------------------------------------------------------------------------- #
+
+_EMAIL_PROVIDERS = ["tuta", "gmx", "atomicmail"]  # mail.ru needs a phone number via sms-activate -- excluded
+
+
+@app.get("/api/emails/providers")
+async def emails_providers():
+    return {"providers": _EMAIL_PROVIDERS}
+
+
+@app.get("/api/emails")
+async def emails_list():
+    return db.list_emails()
+
+
+@app.post("/api/emails/new")
+async def emails_new(request: Request):
+    """Create a new email account with the given provider and bank it in the
+    emails registry. atomicmail.io needs a human to clear its hCaptcha and
+    goes through /api/atomicmail/signup/* instead -- this endpoint covers the
+    providers whose signup is fully scriptable."""
+    b = await _body(request)
+    provider = (b.get("provider") or "").lower()
+    if provider == "tuta":
+        sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+        if not sidecar:
+            _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
+        try:
+            address, password = await _tuta.TutaFactory(sidecar_url=sidecar).create()
+        except _tuta.TutaError as e:
+            _fail(e, 502)
+    elif provider == "gmx":
+        try:
+            address, password = await _gmx.GmxFactory(provider=global_store.settings.gmx_provider or "web.de").create()
+        except _gmx.GmxError as e:
+            _fail(e, 502)
+    elif provider == "mailru":
+        _fail(ValueError("mail.ru needs a phone number for signup — not offered here"))
+        return  # unreachable
+    elif provider == "atomicmail":
+        _fail(ValueError("atomicmail.io needs a human to clear its hCaptcha — "
+                          "use POST /api/atomicmail/signup/start instead"))
+        return  # unreachable
+    else:
+        _fail(ValueError(f"unknown provider {provider!r}"))
+        return  # unreachable
+
+    email_id = db.create_email(provider=provider, address=address, password=password)
+    return {"ok": True, "id": email_id, "provider": provider, "address": address, "password": password}
+
+
+@app.get("/api/emails/{email_id}/credentials")
+async def email_credentials(email_id: int):
+    row = db.get_email(email_id)
+    if not row:
+        _fail(ValueError(f"unknown email id {email_id}"), 404)
+    return {"id": email_id, "address": row["address"], "password": row["password"], "provider": row["provider"]}
+
+
+@app.get("/api/emails/{email_id}/inbox")
+async def emails_inbox(email_id: int):
+    row = db.get_email(email_id)
+    if not row:
+        _fail(ValueError(f"unknown email id {email_id}"), 404)
+    try:
+        messages = await _list_inbox(row["provider"], row["address"], row["password"])
+    except ValueError as e:
+        _fail(e, 502)
+    return {"ok": True, "messages": messages}
+
+
+@app.delete("/api/emails/{email_id}")
+async def emails_delete(email_id: int):
+    """Drop an email from the registry (e.g. the owner found it can no
+    longer log in). This only forgets it locally -- it does not reach out to
+    the provider to delete the remote account."""
+    row = db.get_email(email_id)
+    if not row:
+        _fail(ValueError(f"unknown email id {email_id}"), 404)
+    db.delete_email(email_id)
+    return {"ok": True}
+
+
+@app.post("/api/emails/{email_id}/register-pornolab")
+async def emails_register_pornolab(email_id: int):
+    """Take an already-created email from the registry and run it through
+    the PornoLab registration pipeline, same as /api/register/auto does for
+    a freshly-created one. On success the email is removed from the
+    standalone registry since it now lives on the new PornoLab account."""
+    row = db.get_email(email_id)
+    if not row:
+        _fail(ValueError(f"unknown email id {email_id}"), 404)
+    result = await _register_pornolab_with_email(row["address"], row["password"], row["provider"])
+    if result.get("ok"):
+        db.delete_email(email_id)
+    return result
 
 
 @app.post("/api/atomicmail/signup/start")
@@ -920,9 +1029,12 @@ async def atomicmail_signup_verify(request: Request):
     if not d.get("ok"):
         _fail(ValueError(d.get("error") or "verify failed"), 502)
     if d.get("solved"):
-        # hCaptcha cleared and atomicmail.io finished creating the inbox —
-        # hand it straight to the PornoLab registration pipeline.
-        return await _register_pornolab_with_email(d["email"], d["password"], "atomicmail")
+        # hCaptcha cleared and atomicmail.io finished creating the inbox --
+        # just bank the credentials. Registering it on PornoLab is a
+        # separate, explicit step from the Emails tab, not automatic here.
+        email_id = db.create_email(provider="atomicmail", address=d["email"], password=d["password"])
+        return {"ok": True, "done": True, "solved": True, "email_id": email_id,
+                "email": d["email"], "password": d["password"]}
     return d
 
 

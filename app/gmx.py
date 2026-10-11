@@ -437,6 +437,30 @@ _IMAP_MAP = {
 }
 
 
+async def gmx_list_inbox(email: str, password: str, limit: int = 20) -> list[dict]:
+    """List recent inbox subjects/senders, for the owner's 'check inbox' UI."""
+    domain = email.split("@", 1)[-1].lower()
+    host, port = _IMAP_MAP.get(domain, ("imap.gmx.net", 993))
+    return await asyncio.to_thread(_imap_list_messages, host, port, email, password, limit)
+
+
+def _imap_list_messages(host: str, port: int, email: str, password: str, limit: int) -> list[dict]:
+    out: list[dict] = []
+    try:
+        with imaplib.IMAP4_SSL(host, port) as imap:
+            imap.login(email, password)
+            imap.select("INBOX")
+            _, data = imap.search(None, "ALL")
+            for msg_id in reversed(data[0].split()[-limit:]):
+                _, msg_data = imap.fetch(msg_id, "(RFC822)")
+                raw = msg_data[0][1]
+                msg = _email_module.message_from_bytes(raw)
+                out.append({"from": msg.get("From", ""), "subject": _decode_hdr(msg.get("Subject", ""))})
+    except Exception:
+        pass
+    return list(reversed(out))
+
+
 async def gmx_find_activation(
     email: str,
     password: str,

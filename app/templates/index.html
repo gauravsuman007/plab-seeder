@@ -26,6 +26,7 @@
   <button class="tab" data-tab="torrents">Torrents</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="accounts">Accounts</button>
+  <button class="tab" data-tab="emails">Emails</button>
   <button class="tab" data-tab="events">Events</button>
   <button class="tab" data-tab="register">Register</button>
 </nav>
@@ -375,27 +376,39 @@
     </div>
   </section>
 
-  <!-- ============================ REGISTER ============================ -->
-  <section class="panel" id="panel-register">
-    <div class="card" style="max-width:540px">
-      <h2>Full automation</h2>
-      <p class="muted small">Creates an email account, registers a new PornoLab account with it, and
-         (for Tuta) activates it automatically — retrying the captcha up to 10 times if needed. The
-         new account is added to the switcher above and the Accounts tab even if automatic activation
-         doesn't complete; check that account's email inbox to finish by hand if so.</p>
-      <div class="form-actions">
-        <button type="button" class="btn primary" id="fullAutoBtn">Create &amp; register a new account</button>
+  <!-- ============================= EMAILS ============================= -->
+  <section class="panel" id="panel-emails">
+    <div class="card">
+      <div class="card-head">
+        <h2>Emails</h2>
+        <button class="btn small" id="refreshEmailsBtn">Refresh</button>
       </div>
-      <div id="fullAutoStatus" class="muted small" hidden></div>
+      <p class="muted small">Email accounts created but not yet tied to a PornoLab registration.
+         Create one from a provider below, check its inbox, register it on PornoLab when you're
+         ready, or delete it if it stops being able to log in.</p>
+      <div class="form-actions" style="margin-bottom:.75rem">
+        <select id="emailsProviderSelect"></select>
+        <button type="button" class="btn" id="emailsNewBtn">New email</button>
+      </div>
+      <div id="emailsStatus" class="muted small" hidden></div>
+      <div class="table-wrap">
+        <table class="table" id="emailsTable">
+          <thead>
+            <tr>
+              <th>Provider</th><th>Address</th><th>Password</th><th>Created</th><th>Inbox</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card" style="max-width:540px">
-      <h2>Atomicmail.io signup (manual captcha)</h2>
-      <p class="muted small">atomicmail.io is accepted by PornoLab and needs no phone number, but its
-         signup is gated by hCaptcha, which the automated browser can't clear on its own. Click
-         "Start" to create a fresh inbox up to the captcha, then click the matching tiles directly on
-         the image below and hit Verify. Repeat if another round appears; once it clears, the account
-         is registered on PornoLab automatically.</p>
+      <h2>Atomicmail.io (manual captcha)</h2>
+      <p class="muted small">atomicmail.io needs no phone number, but its signup is gated by hCaptcha,
+         which the automated browser can't clear on its own. Click "Start" to create a fresh inbox up
+         to the captcha, then click the matching tiles directly on the image below and hit Verify.
+         Repeat if another round appears; once it clears, the email is added to the list above.</p>
       <div class="form-actions">
         <button type="button" class="btn" id="atomicmailStartBtn">Start</button>
         <button type="button" class="btn" id="atomicmailVerifyBtn" hidden>Verify</button>
@@ -408,6 +421,35 @@
                     touch-action:manipulation;user-select:none;-webkit-user-drag:none">
       </div>
       <div id="atomicmailStatus" class="muted small" hidden></div>
+    </div>
+
+    <div class="card" id="emailsInboxCard" hidden style="max-width:540px">
+      <div class="card-head">
+        <h2>Inbox</h2>
+        <button class="btn small" id="emailsInboxCloseBtn">Close</button>
+      </div>
+      <div id="emailsInboxAddress" class="muted small"></div>
+      <div class="table-wrap">
+        <table class="table" id="emailsInboxTable">
+          <thead><tr><th>From</th><th>Subject</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ REGISTER ============================ -->
+  <section class="panel" id="panel-register">
+    <div class="card" style="max-width:540px">
+      <h2>Full automation</h2>
+      <p class="muted small">Creates an email account, registers a new PornoLab account with it, and
+         (for Tuta) activates it automatically — retrying the captcha up to 10 times if needed. The
+         new account is added to the switcher above and the Accounts tab even if automatic activation
+         doesn't complete; check that account's email inbox to finish by hand if so.</p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="fullAutoBtn">Create &amp; register a new account</button>
+      </div>
+      <div id="fullAutoStatus" class="muted small" hidden></div>
     </div>
 
     <div class="card" style="max-width:540px">

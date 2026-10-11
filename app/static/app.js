@@ -891,14 +891,9 @@ function initAtomicmail() {
     statusEl.textContent = "Submitting…";
     try {
       const res = await api("POST", "/api/atomicmail/signup/verify", { session_id: sessionId });
-      if (res.solved || (res.ok && res.account_id)) {
-        statusEl.textContent = res.activated
-          ? `✓ Registered and activated: ${res.username} (${res.email})`
-          : `✓ Registered: ${res.username} (${res.email}) — activation pending.`;
-        currentAccountId = res.account_id;
-        localStorage.setItem("accountId", String(currentAccountId));
-        await loadAccountSwitcher();
-        await refreshState();
+      if (res.solved) {
+        statusEl.textContent = `✓ Email created: ${res.email} — added to the list above.`;
+        await loadEmails();
         reset();
       } else if (res.image) {
         showChallenge(res);
@@ -991,6 +986,133 @@ function initAccounts() {
   $("#refreshAccountsBtn").addEventListener("click", loadAccounts);
 }
 
+// ------------------------------------------------------------------- emails
+async function loadEmails() {
+  const emails = await api("GET", "/api/emails");
+  const tbody = $("#emailsTable tbody");
+  if (!emails.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">No emails yet — create one above.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = emails.map(e => `
+    <tr data-email-row="${e.id}">
+      <td>${escapeHtml(e.provider)}</td>
+      <td>${escapeHtml(e.address)}</td>
+      <td class="pw-cell" data-field="password">••••••••</td>
+      <td>${new Date(e.created_at * 1000).toLocaleString()}</td>
+      <td class="row-actions">
+        <button class="btn small" data-reveal="${e.id}">Show</button>
+        <button class="btn small" data-inbox="${e.id}">Check inbox</button>
+      </td>
+      <td class="row-actions">
+        <button class="btn small" data-register="${e.id}">Register on PornoLab</button>
+        <button class="btn small danger" data-delete="${e.id}">Delete</button>
+      </td>
+    </tr>
+  `).join("");
+
+  $$("#emailsTable [data-reveal]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.reveal;
+      const row = $(`tr[data-email-row="${id}"]`);
+      try {
+        const creds = await api("GET", `/api/emails/${id}/credentials`);
+        row.querySelector('[data-field="password"]').textContent = creds.password || "—";
+        btn.textContent = "Shown";
+        btn.disabled = true;
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    });
+  });
+
+  $$("#emailsTable [data-inbox]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Loading…";
+      try {
+        const [res, rec] = await Promise.all([
+          api("GET", `/api/emails/${btn.dataset.inbox}/inbox`),
+          api("GET", `/api/emails/${btn.dataset.inbox}/credentials`),
+        ]);
+        $("#emailsInboxAddress").textContent = rec.address || "";
+        const inboxTbody = $("#emailsInboxTable tbody");
+        inboxTbody.innerHTML = (res.messages || []).length
+          ? res.messages.map(m => `<tr><td>${escapeHtml(m.from || "")}</td><td>${escapeHtml(m.subject || "(no subject)")}</td></tr>`).join("")
+          : `<tr><td colspan="2" class="empty">Inbox empty</td></tr>`;
+        $("#emailsInboxCard").hidden = false;
+      } catch (e) {
+        toast(e.message, "err");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Check inbox";
+      }
+    });
+  });
+
+  $$("#emailsTable [data-register]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Registering…";
+      try {
+        const res = await api("POST", `/api/emails/${btn.dataset.register}/register-pornolab`, {});
+        toast(res.activated
+          ? `✓ Registered and activated: ${res.username} (${res.email})`
+          : `✓ Registered: ${res.username} (${res.email}) — activation pending.`, "ok");
+        await loadEmails();
+        await loadAccountSwitcher();
+      } catch (e) {
+        toast(e.message, "err");
+        btn.disabled = false;
+        btn.textContent = "Register on PornoLab";
+      }
+    });
+  });
+
+  $$("#emailsTable [data-delete]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this email from the list? This does not delete the remote account.")) return;
+      btn.disabled = true;
+      try {
+        await api("DELETE", `/api/emails/${btn.dataset.delete}`);
+        await loadEmails();
+      } catch (e) {
+        toast(e.message, "err");
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function initEmails() {
+  $("#refreshEmailsBtn").addEventListener("click", loadEmails);
+  $("#emailsInboxCloseBtn").addEventListener("click", () => { $("#emailsInboxCard").hidden = true; });
+
+  const select = $("#emailsProviderSelect");
+  api("GET", "/api/emails/providers").then(res => {
+    select.innerHTML = (res.providers || [])
+      .filter(p => p !== "atomicmail")   // atomicmail has its own manual-captcha button below
+      .map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+  }).catch(() => {});
+
+  $("#emailsNewBtn").addEventListener("click", async () => {
+    const btn = $("#emailsNewBtn");
+    const statusEl = $("#emailsStatus");
+    btn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = `Creating a ${select.value} email…`;
+    try {
+      const res = await api("POST", "/api/emails/new", { provider: select.value });
+      statusEl.textContent = `✓ Created ${res.address}`;
+      await loadEmails();
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 // ----------------------------------------------------------- mail.ru factory
 function initEmailFactory() {
   const btn      = $("#regEmailBtn");
@@ -1050,6 +1172,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   initSettings();
   initEvents();
   initAccounts();
+  initEmails();
+  loadEmails();
   initHistory();
   initRegister();
   initEmailFactory();
