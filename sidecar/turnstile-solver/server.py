@@ -322,7 +322,16 @@ async def tuta_inbox(req: TutaInboxRequest) -> TutaInboxResponse:
             ) as b:
                 page = await b.new_page()
                 await page.goto("https://app.tuta.com/login", wait_until="load", timeout=30000)
-                await page.wait_for_timeout(3000)
+                # Same slow-boot SPA as /tuta/create (~45-60s to compile its
+                # WASM crypto module before the login form exists) -- a fixed
+                # 3s pause meant this almost always hit "login form fields
+                # not found" (confirmed live 2026-10-11: auto-activation
+                # failed with exactly that error right after a successful
+                # signup). Wait for the real password field instead.
+                try:
+                    await page.wait_for_selector('input[type="password"]', timeout=90000)
+                except Exception:                                           # noqa: BLE001
+                    pass
 
                 inputs = await page.query_selector_all("input")
                 user_el, pw_el = None, None
@@ -377,9 +386,16 @@ async def tuta_inbox(req: TutaInboxRequest) -> TutaInboxResponse:
                                     "activate" in url or "profile" in url
                                 ):
                                     return TutaInboxResponse(ok=True, url=url)
+                    # No reload here: Tuta's webmail is a live SPA that
+                    # pushes new mail into the list on its own, and a
+                    # page.reload() re-triggers the same ~45-60s WASM-boot
+                    # delay seen on signup/login above -- on a 90s
+                    # max_timeout, even one reload could burn the entire
+                    # budget before ever re-checking the list (confirmed
+                    # live 2026-10-11: the whole /tuta/inbox call exceeded
+                    # its own caller's timeout with no result). Just wait
+                    # and re-poll the DOM in place.
                     await page.wait_for_timeout(5000)
-                    await page.reload(wait_until="load")
-                    await page.wait_for_timeout(2000)
 
                 return TutaInboxResponse(ok=False, error="no matching email within max_timeout")
         except Exception as e:                                           # noqa: BLE001
@@ -412,7 +428,11 @@ async def tuta_list(req: TutaListRequest) -> TutaListResponse:
             ) as b:
                 page = await b.new_page()
                 await page.goto("https://app.tuta.com/login", wait_until="load", timeout=30000)
-                await page.wait_for_timeout(3000)
+                # Same slow-boot SPA as tuta_inbox/tuta_create above.
+                try:
+                    await page.wait_for_selector('input[type="password"]', timeout=90000)
+                except Exception:                                           # noqa: BLE001
+                    pass
 
                 inputs = await page.query_selector_all("input")
                 user_el, pw_el = None, None
