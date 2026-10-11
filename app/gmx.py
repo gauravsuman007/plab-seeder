@@ -85,19 +85,21 @@ class GmxFactory:
 
     Both providers share the same IONOS/1&1 backend; only the UI skin differs.
 
-    Selector notes (verified 2025-10-11 from German IP):
-      web.de and gmx.net both use a React/Angular SPA with dynamically generated
-      class names.  The stable selectors are name= and data-testid= attributes.
+    Selector notes (verified 2026-10-11 from German IP):
+      Both use a multi-step React SPA.  Step 1: firstName/lastName/birthDay/
+      birthMonth/birthYear (text inputs), Next button (data-testid="next-button").
+      Step 2+: email alias, password, terms.  Stable selectors are name= and
+      data-testid= attrs; fill with keyboard.type() not fill() so React onChange fires.
     """
 
     _PROVIDERS = {
         "web.de": {
-            "signup_url": "https://web.de/registrieren/",
+            "signup_url": "https://register.web.de/",
             "domain": "web.de",
             "imap_host": "imap.web.de",
         },
         "gmx.net": {
-            "signup_url": "https://www.gmx.net/mail/registrierung/",
+            "signup_url": "https://register.gmx.net/",
             "domain": "gmx.net",
             "imap_host": "imap.gmx.net",
         },
@@ -151,7 +153,7 @@ class GmxFactory:
             display.stop()
 
     async def _fill_form(self, page, *, login: str, password: str) -> str:
-        """Drive the registration form. Returns the created email address."""
+        """Drive the multi-step registration form. Returns the created email address."""
         first = random.choice(_FIRST_NAMES)
         last = random.choice(_LAST_NAMES)
         dob_day = str(random.randint(1, 28))
@@ -159,122 +161,91 @@ class GmxFactory:
         dob_year = str(random.randint(1975, 2000))
 
         await page.goto(self._cfg["signup_url"], wait_until="domcontentloaded", timeout=30000)
+
+        # --- Step 1: name + date of birth ---
+        # DOB fields are <input type="text"> (not selects) — use React-compatible typing.
+        await page.wait_for_selector('input[name="firstName"]', timeout=20000)
+        await _react_type(page, 'input[name="firstName"]', first)
+        await _react_type(page, 'input[name="lastName"]', last)
+        await _react_type(page, 'input[name="birthDay"]', dob_day)
+        await _react_type(page, 'input[name="birthMonth"]', dob_month)
+        await _react_type(page, 'input[name="birthYear"]', dob_year)
+
+        # Wait for validation to enable the Next button, then click it.
+        await page.wait_for_selector(
+            'button[data-testid="next-button"]:not([disabled])', timeout=10000
+        )
+        await page.click('button[data-testid="next-button"]')
         await page.wait_for_timeout(3000)
 
-        # --- Dismiss cookie / consent dialog if present ---
-        for consent_sel in [
-            'button[data-testid="uc-accept-all-button"]',
-            'button[data-action="accept"]',
-            'button:has-text("Alle akzeptieren")',
-            'button:has-text("Akzeptieren")',
-            'button:has-text("Zustimmen")',
-            'button:has-text("Agree")',
-        ]:
-            try:
-                btn = await page.query_selector(consent_sel)
-                if btn and await btn.is_visible():
-                    await btn.click()
-                    await page.wait_for_timeout(1500)
-                    break
-            except Exception:
-                pass
+        # --- Step 2+: email address / password / terms ---
+        # Fill email login (desired address prefix)
+        await _react_type(page, 'input[name="emailAlias"]', login, required=False)
+        await _react_type(page, 'input[name="login"]', login, required=False)
 
-        # --- Wait for the registration form to appear ---
-        # Both web.de and gmx.net load the form after the consent dialog
-        await page.wait_for_timeout(2000)
-
-        # --- Fill personal details ---
-        await _fill_field(page, [
-            'input[name="firstName"]', 'input[name="firstname"]',
-            'input[id*="first"]', 'input[placeholder*="Vorname"]',
-            'input[placeholder*="First"]',
-        ], first)
-
-        await _fill_field(page, [
-            'input[name="lastName"]', 'input[name="lastname"]', 'input[name="surname"]',
-            'input[id*="last"]', 'input[placeholder*="Nachname"]',
-            'input[placeholder*="Last"]',
-        ], last)
-
-        # --- Desired email address ---
-        await _fill_field(page, [
-            'input[name="email"]', 'input[name="login"]', 'input[name="userName"]',
-            'input[id*="email"]', 'input[placeholder*="@"]',
-            'input[placeholder*="E-Mail"]', 'input[placeholder*="Wunsch"]',
-        ], login)
-
-        # --- Password ---
+        # Password fields
         pw_els = await page.query_selector_all('input[type="password"]')
         for pw_el in pw_els[:2]:
             try:
-                await pw_el.triple_click()
-                await pw_el.fill(password)
+                if await pw_el.is_visible():
+                    await pw_el.click()
+                    await pw_el.select_text()
+                    await page.keyboard.type(password, delay=40)
             except Exception:
                 pass
 
-        # --- Date of birth ---
-        await _try_select(page, [
-            'select[name="dayofbirth"]', 'select[name="day"]', 'select[id*="day"]',
-        ], dob_day)
-
-        await _try_select(page, [
-            'select[name="monthofbirth"]', 'select[name="month"]', 'select[id*="month"]',
-        ], dob_month)
-
-        await _try_select(page, [
-            'select[name="yearofbirth"]', 'select[name="year"]', 'select[id*="year"]',
-        ], dob_year)
-
-        # --- Accept terms (checkbox) ---
+        # Accept terms checkbox if present
         for tos_sel in [
-            'input[name="agb"]', 'input[name="terms"]', 'input[type="checkbox"]',
-            'input[id*="agb"]', 'input[id*="terms"]',
+            'input[name="agb"]', 'input[name="terms"]',
+            'input[type="checkbox"]', 'input[id*="agb"]',
         ]:
             try:
                 cb = await page.query_selector(tos_sel)
-                if cb and not await cb.is_checked():
+                if cb and await cb.is_visible() and not await cb.is_checked():
                     await cb.click()
                     break
             except Exception:
                 pass
 
-        # --- CAPTCHA (image-based, solved by _solve_captcha) ---
+        # Click next/submit if there's another step
+        try:
+            btn = await page.query_selector(
+                'button[data-testid="next-button"]:not([disabled])'
+            )
+            if btn and await btn.is_visible():
+                await btn.click()
+                await page.wait_for_timeout(3000)
+        except Exception:
+            pass
+
+        # --- Captcha (if any) ---
         captcha_text = await self._solve_captcha(page)
         if captcha_text:
-            await _fill_field(page, [
-                'input[name="captcha"]', 'input[name="captchacode"]',
-                'input[id*="captcha"]', 'input[placeholder*="aptcha"]',
-            ], captcha_text, required=False)
+            await _react_type(page, 'input[name="captcha"]', captcha_text, required=False)
+            await _react_type(page, 'input[id*="captcha"]', captcha_text, required=False)
 
-        # --- Submit ---
+        # --- Final submit ---
         await _click_submit(page)
-        await page.wait_for_timeout(4000)
+        await page.wait_for_timeout(5000)
 
         # --- Check outcome ---
         url = page.url
-        if "inbox" in url or "mail" in url and "login" not in url:
-            return f"{login}@{self._cfg['domain']}"
-
-        # Look for captcha error → retry once with fresh captcha
         err_text = await _get_error(page)
+
         if err_text and ("captcha" in err_text.lower() or "code" in err_text.lower()):
             captcha_text = await self._solve_captcha(page)
             if captcha_text:
-                await _fill_field(page, [
-                    'input[name="captcha"]', 'input[name="captchacode"]',
-                    'input[id*="captcha"]', 'input[placeholder*="aptcha"]',
-                ], captcha_text, required=False)
+                await _react_type(page, 'input[name="captcha"]', captcha_text, required=False)
+                await _react_type(page, 'input[id*="captcha"]', captcha_text, required=False)
                 await _click_submit(page)
                 await page.wait_for_timeout(4000)
                 url = page.url
                 err_text = await _get_error(page)
 
-        # Final error check
         if err_text:
             raise GmxError(f"registration error: {err_text}")
-        if "signup" in url or "registrier" in url or "error" in url:
-            html_len = len(await page.content())
-            raise GmxError(f"stuck on {url} after registration (page length {html_len})")
+        if "register" in url and "confirm" not in url and "success" not in url:
+            raise GmxError(f"stuck on {url} after registration")
 
         return f"{login}@{self._cfg['domain']}"
 
@@ -363,16 +334,27 @@ def _solve_ocr(image_bytes: bytes) -> str:
 # Form helpers
 # --------------------------------------------------------------------------- #
 
+async def _react_type(page, selector: str, value: str, required: bool = True) -> bool:
+    """Type into a React-controlled input so onChange fires properly."""
+    try:
+        el = await page.query_selector(selector)
+        if el and await el.is_visible():
+            await el.click()
+            await page.keyboard.press("Control+a")
+            await page.keyboard.press("Delete")
+            await page.keyboard.type(str(value), delay=40)
+            return True
+    except Exception:
+        pass
+    if required:
+        raise GmxError(f"field not found: {selector!r}")
+    return False
+
+
 async def _fill_field(page, selectors: list[str], value: str, required: bool = True) -> None:
     for sel in selectors:
-        try:
-            el = await page.query_selector(sel)
-            if el and await el.is_visible():
-                await el.triple_click()
-                await el.fill(value)
-                return
-        except Exception:
-            continue
+        if await _react_type(page, sel, value, required=False):
+            return
     if required:
         raise GmxError(f"field not found: {selectors[:2]}")
 
