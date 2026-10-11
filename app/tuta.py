@@ -58,7 +58,16 @@ class TutaFactory:
         sender_pattern: str = "pornolab",
     ) -> str | None:
         """Log into the Tuta webmail UI and return the activation link, or
-        None if nothing matching arrived within `timeout` seconds."""
+        None if nothing matching arrived within `timeout` seconds.
+
+        Raises TutaError on a real failure (bad login, sidecar error) rather
+        than silently returning None for that case too -- conflating "logged
+        in fine, nothing arrived yet" with "couldn't log in at all" hid a real
+        bug here once already (confirmed live 2026-10-11: the sidecar was
+        correctly detecting "Invalid login credentials" and returning
+        ok:false, but this method swallowed it and the API endpoint reported
+        {"ok": true, "url": null} regardless).
+        """
         async with httpx.AsyncClient(timeout=timeout + 30) as c:
             r = await c.post(
                 f"{self.sidecar_url}/tuta/inbox",
@@ -72,5 +81,5 @@ class TutaFactory:
             r.raise_for_status()
             d = r.json()
         if not d.get("ok"):
-            return None
+            raise TutaError(d.get("error") or "tuta inbox check failed")
         return d.get("url") or None

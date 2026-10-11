@@ -497,7 +497,10 @@ async def email_activation(request: Request):
     if not sidecar:
         _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
     factory = _tuta.TutaFactory(sidecar_url=sidecar)
-    url = await factory.find_activation(email, password, timeout=int(b.get("timeout") or 120))
+    try:
+        url = await factory.find_activation(email, password, timeout=int(b.get("timeout") or 120))
+    except _tuta.TutaError as e:
+        _fail(e, 502)
     return {"ok": True, "url": url}
 
 
