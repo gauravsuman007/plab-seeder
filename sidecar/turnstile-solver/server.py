@@ -337,15 +337,19 @@ async def tuta_inbox(req: TutaInboxRequest) -> TutaInboxResponse:
                 if await login_btn.count() == 0:
                     login_btn = page.locator('button:has-text("Login")').first
                 await login_btn.click()
-                await page.wait_for_timeout(6000)
+                await page.wait_for_timeout(7000)
 
                 # Fail fast on bad credentials instead of silently polling an
                 # empty inbox list until max_timeout (that masked a real bug
                 # here on 2026-10-11 -- see _rand_password()'s docstring).
-                if "login" in page.url:
-                    err_text = await page.evaluate("document.body.innerText")
-                    if "Invalid login" in err_text or "invalid" in err_text.lower():
-                        return TutaInboxResponse(ok=False, error="invalid Tuta login credentials")
+                # Check the body text unconditionally -- gating on page.url
+                # containing "login" was unreliable (observed false negatives
+                # live: the error text was present but this returned ok:true).
+                body_text = await page.evaluate("document.body.innerText")
+                log.info("tuta/inbox post-login state: url=%s body_head=%r",
+                         page.url, body_text[:120])
+                if "Invalid login" in body_text:
+                    return TutaInboxResponse(ok=False, error="invalid Tuta login credentials")
 
                 # Verified selectors (2026-10-11): rows are <li class="list-row">,
                 # the open-email reading pane is <div class="mail-viewer">.
