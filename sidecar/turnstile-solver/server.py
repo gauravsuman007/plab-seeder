@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import string
 import time
 from typing import Any
 
@@ -184,12 +185,8 @@ def _parse_form(data: str) -> list[tuple[str, str]]:
 # (Tuta is API-only by design for its end-to-end encryption model), so the
 # activation-email lookup also has to go through the browser, not imaplib.
 
-import random as _random
-import string as _string
-
-
 def _rand_login(n: int = 12) -> str:
-    return "pl" + "".join(_random.choices(_string.ascii_lowercase + _string.digits, k=n))
+    return "pl" + "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
 
 def _rand_password(n: int = 16) -> str:
@@ -202,13 +199,13 @@ def _rand_password(n: int = 16) -> str:
     2026-10-11: a password containing "@@" created an account that could
     never log back in). Alphanumeric-only sidesteps the whole class of bug.
     """
-    chars = _string.ascii_letters + _string.digits
-    pw = list(_random.choices(chars, k=n))
-    pw[0] = _random.choice(_string.ascii_uppercase)
-    pw[1] = _random.choice(_string.ascii_lowercase)
-    pw[2] = _random.choice(_string.digits)
-    pw[3] = _random.choice(_string.digits)
-    _random.shuffle(pw)
+    chars = string.ascii_letters + string.digits
+    pw = list(random.choices(chars, k=n))
+    pw[0] = random.choice(string.ascii_uppercase)
+    pw[1] = random.choice(string.ascii_lowercase)
+    pw[2] = random.choice(string.digits)
+    pw[3] = random.choice(string.digits)
+    random.shuffle(pw)
     return "".join(pw)
 
 
@@ -445,3 +442,290 @@ async def tuta_list(req: TutaListRequest) -> TutaListResponse:
         except Exception as e:                                           # noqa: BLE001
             log.exception("tuta/list failed")
             return TutaListResponse(ok=False, error=f"{type(e).__name__}: {e}")
+
+
+# --------------------------------------------------------------------------- #
+# atomicmail.io account factory -- interactive hCaptcha relay
+# --------------------------------------------------------------------------- #
+#
+# atomicmail.io's own signup flow (name -> username -> password -> seed
+# phrase) is simple and phone-free, confirmed live 2026-10-11, but the final
+# step is gated by hCaptcha in "invisible" mode -- unlike PornoLab's/Tuta's
+# Cloudflare Turnstile, camoufox's humanize behaviour does NOT auto-clear it
+# (confirmed: reCAPTCHA v2 checkboxes elsewhere on this host auto-pass with a
+# single mouse click, this does not). hCaptcha also varies its challenge
+# type per round (3x3 grid-click, "click the odd one out" on a single image,
+# drag-a-shape) so there's no single click-pattern to automate; the only
+# approach that generalises is handing the actual challenge screenshot to a
+# human and relaying their click back into the live browser session.
+#
+# This keeps a camoufox browser alive in memory across HTTP calls (start,
+# then one or more solve calls) -- deliberately NOT under the shared
+# _solver_lock used by /solve and /tuta/*, since a human may take minutes to
+# look at and click the image and that must not block the one-shot
+# Turnstile/Tuta endpoints other parts of the app depend on.
+
+import base64 as _b64
+import secrets as _secrets
+
+_atomicmail_lock = asyncio.Lock()           # at most one interactive session at a time
+_atomicmail_sessions: dict[str, dict] = {}  # session_id -> state
+_ATOMICMAIL_SESSION_TIMEOUT = 600            # 10 min idle -> cleaned up
+
+
+def _rand_am_login(n: int = 12) -> str:
+    return "pl" + "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+
+
+def _rand_am_password(n: int = 16) -> str:
+    chars = string.ascii_letters + string.digits
+    pw = list(random.choices(chars, k=n))
+    pw[0] = random.choice(string.ascii_uppercase)
+    pw[1] = random.choice(string.ascii_lowercase)
+    pw[2] = random.choice(string.digits)
+    pw[3] = "!"
+    random.shuffle(pw)
+    return "".join(pw) + "!"
+
+
+async def _close_am_session(session_id: str) -> None:
+    sess = _atomicmail_sessions.pop(session_id, None)
+    if sess:
+        try:
+            await sess["browser"].close()
+        except Exception:                                                # noqa: BLE001
+            pass
+
+
+async def _am_cleanup_stale() -> None:
+    now = time.monotonic()
+    stale = [sid for sid, s in _atomicmail_sessions.items()
+             if now - s["last_used"] > _ATOMICMAIL_SESSION_TIMEOUT]
+    for sid in stale:
+        await _close_am_session(sid)
+
+
+async def _am_capture_challenge(page) -> dict | None:
+    """Find the hCaptcha challenge iframe, screenshot it, return
+    {image_b64, prompt, box} or None if no challenge is currently showing."""
+    iframe_el = None
+    for el in await page.query_selector_all("iframe"):
+        src = await el.get_attribute("src") or ""
+        if "hcaptcha" in src and "frame=challenge" in src:
+            iframe_el = el
+            break
+    if not iframe_el:
+        return None
+    box = await iframe_el.bounding_box()
+    if not box or box["width"] <= 0:
+        return None
+    png = await page.screenshot(clip={"x": box["x"], "y": box["y"],
+                                      "width": box["width"], "height": box["height"]})
+    prompt = ""
+    for f in page.frames:
+        if "hcaptcha" in f.url and "frame=challenge" in f.url:
+            try:
+                prompt = (await f.evaluate(
+                    "document.querySelector('[class*=\"prompt\"],.challenge-prompt-text')?.innerText || ''"
+                )) or ""
+            except Exception:                                            # noqa: BLE001
+                pass
+            break
+    return {"image_b64": _b64.standard_b64encode(png).decode(), "prompt": prompt.strip(), "box": box}
+
+
+class AtomicmailStartResponse(BaseModel):
+    ok: bool
+    session_id: str = ""
+    image: str = ""
+    prompt: str = ""
+    email: str = ""
+    password: str = ""
+    solved_without_challenge: bool = False
+    error: str = ""
+
+
+@app.post("/atomicmail/signup/start", response_model=AtomicmailStartResponse)
+async def atomicmail_signup_start() -> AtomicmailStartResponse:
+    await _am_cleanup_stale()
+    if _atomicmail_lock.locked():
+        return AtomicmailStartResponse(ok=False, error="another interactive signup is already in progress")
+
+    await _atomicmail_lock.acquire()
+    login = _rand_am_login()
+    password = _rand_am_password()
+    try:
+        from camoufox.async_api import AsyncCamoufox
+        camoufox = AsyncCamoufox(headless="virtual", geoip=False, humanize=True, exclude_addons=["UBO"])
+        browser = await camoufox.__aenter__()
+        page = await browser.new_page()
+
+        await page.goto("https://atomicmail.io/app/auth/sign-up", wait_until="load", timeout=30000)
+        await page.wait_for_timeout(3000)
+        await page.locator('input[name="firstName"]').first.click()
+        await page.keyboard.type("Anna", delay=50)
+        await page.wait_for_timeout(300)
+        await page.locator('button:has-text("Submit")').first.click(force=True)
+        await page.wait_for_timeout(3000)
+        await page.locator('input[name="username"]').first.click()
+        await page.keyboard.type(login, delay=50)
+        await page.wait_for_timeout(500)
+        await page.locator('button:has-text("Submit")').first.click(force=True)
+        await page.wait_for_timeout(3000)
+        await page.locator('input[name="password"]').first.click()
+        await page.keyboard.type(password, delay=40)
+        await page.locator('input[name="confirmPassword"]').first.click()
+        await page.keyboard.type(password, delay=40)
+        await page.wait_for_timeout(500)
+        await page.locator('button:has-text("Submit")').first.click(force=True)
+        await page.wait_for_timeout(4000)
+        await page.locator('button:has-text("Download & Proceed")').first.click(force=True)
+        await page.wait_for_timeout(5000)
+
+        text = await page.evaluate("document.body.innerText")
+        if "Save your Seed Phrase" not in text:
+            # Unexpectedly resolved without a challenge (or failed outright)
+            await browser.__aexit__(None, None, None)
+            _atomicmail_lock.release()
+            ok = "atomicmail.io" in page.url or "success" in text.lower()
+            return AtomicmailStartResponse(ok=ok, email=f"{login}@atomicmail.io", password=password,
+                                           solved_without_challenge=True,
+                                           error="" if ok else "unexpected state after signup")
+
+        challenge = await _am_capture_challenge(page)
+        if not challenge:
+            await browser.__aexit__(None, None, None)
+            _atomicmail_lock.release()
+            return AtomicmailStartResponse(ok=False, error="no hCaptcha challenge found to solve")
+
+        session_id = _secrets.token_urlsafe(16)
+        _atomicmail_sessions[session_id] = {
+            "camoufox": camoufox, "browser": browser, "page": page,
+            "login": login, "password": password, "box": challenge["box"],
+            "last_used": time.monotonic(), "rounds": 0,
+        }
+        _atomicmail_lock.release()
+        return AtomicmailStartResponse(
+            ok=True, session_id=session_id, image=challenge["image_b64"],
+            prompt=challenge["prompt"], email=f"{login}@atomicmail.io", password=password,
+        )
+    except Exception as e:                                               # noqa: BLE001
+        log.exception("atomicmail/signup/start failed")
+        try:
+            _atomicmail_lock.release()
+        except RuntimeError:
+            pass
+        return AtomicmailStartResponse(ok=False, error=f"{type(e).__name__}: {e}")
+
+
+class AtomicmailClickRequest(BaseModel):
+    session_id: str
+    x: float = Field(..., ge=0.0, le=1.0, description="relative x within the challenge image, 0-1")
+    y: float = Field(..., ge=0.0, le=1.0, description="relative y within the challenge image, 0-1")
+
+
+class AtomicmailClickResponse(BaseModel):
+    ok: bool
+    error: str = ""
+
+
+@app.post("/atomicmail/signup/click", response_model=AtomicmailClickResponse)
+async def atomicmail_signup_click(req: AtomicmailClickRequest) -> AtomicmailClickResponse:
+    """Register one click at a relative position within the challenge image
+    the owner is looking at -- for multi-click challenges (3x3 grids), call
+    this once per cell, then call /verify."""
+    sess = _atomicmail_sessions.get(req.session_id)
+    if not sess:
+        return AtomicmailClickResponse(ok=False, error="unknown or expired session")
+    sess["last_used"] = time.monotonic()
+    page = sess["page"]
+    box = sess["box"]
+    x = box["x"] + req.x * box["width"]
+    y = box["y"] + req.y * box["height"]
+    try:
+        await page.mouse.click(x, y, delay=90)
+        await page.wait_for_timeout(400)
+        return AtomicmailClickResponse(ok=True)
+    except Exception as e:                                               # noqa: BLE001
+        return AtomicmailClickResponse(ok=False, error=f"{type(e).__name__}: {e}")
+
+
+class AtomicmailVerifyRequest(BaseModel):
+    session_id: str
+
+
+class AtomicmailVerifyResponse(BaseModel):
+    ok: bool
+    done: bool = False          # true once fully resolved (success or permanent failure)
+    solved: bool = False        # true if signup completed successfully
+    image: str = ""             # a new challenge, if another round is needed
+    prompt: str = ""
+    email: str = ""
+    password: str = ""
+    error: str = ""
+
+
+@app.post("/atomicmail/signup/verify", response_model=AtomicmailVerifyResponse)
+async def atomicmail_signup_verify(req: AtomicmailVerifyRequest) -> AtomicmailVerifyResponse:
+    """After one or more /click calls select the right spot(s), call this to
+    submit hCaptcha's own verify control and see what happened: solved
+    (signup completes and the session closes), another round (a fresh image
+    comes back, call /click again), or still unsolved (try again)."""
+    sess = _atomicmail_sessions.get(req.session_id)
+    if not sess:
+        return AtomicmailVerifyResponse(ok=False, error="unknown or expired session")
+    sess["last_used"] = time.monotonic()
+    page = sess["page"]
+    try:
+        # hCaptcha's own submit control inside the challenge frame -- try a
+        # few likely selectors, falling back to no-op (some challenge types
+        # auto-advance once enough correct cells are clicked).
+        for f in page.frames:
+            if "hcaptcha" in f.url and "frame=challenge" in f.url:
+                for sel in ['.button-submit', '[class*="submit"]', 'button[type="submit"]']:
+                    try:
+                        btn = f.locator(sel).first
+                        if await btn.count() and await btn.is_visible():
+                            await btn.click(force=True)
+                            break
+                    except Exception:                                     # noqa: BLE001
+                        pass
+                break
+        await page.wait_for_timeout(2500)
+
+        text = await page.evaluate("document.body.innerText")
+        if "Save your Seed Phrase" not in text:
+            # Moved past the seed-phrase screen -- signup is done.
+            email = f"{sess['login']}@atomicmail.io"
+            password = sess["password"]
+            await _close_am_session(req.session_id)
+            return AtomicmailVerifyResponse(ok=True, done=True, solved=True, email=email, password=password)
+
+        sess["rounds"] += 1
+        if sess["rounds"] >= 8:
+            await _close_am_session(req.session_id)
+            return AtomicmailVerifyResponse(ok=False, done=True, error="too many captcha rounds, giving up")
+
+        challenge = await _am_capture_challenge(page)
+        if not challenge:
+            # Challenge widget vanished without the seed screen clearing --
+            # ambiguous; report back without closing so the owner can retry.
+            return AtomicmailVerifyResponse(ok=True, done=False,
+                                            error="no visible challenge right now -- try /verify again shortly")
+        sess["box"] = challenge["box"]
+        return AtomicmailVerifyResponse(ok=True, done=False, image=challenge["image_b64"],
+                                        prompt=challenge["prompt"])
+    except Exception as e:                                               # noqa: BLE001
+        log.exception("atomicmail/signup/verify failed")
+        await _close_am_session(req.session_id)
+        return AtomicmailVerifyResponse(ok=False, done=True, error=f"{type(e).__name__}: {e}")
+
+
+class AtomicmailCancelRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/atomicmail/signup/cancel")
+async def atomicmail_signup_cancel(req: AtomicmailCancelRequest) -> dict:
+    await _close_am_session(req.session_id)
+    return {"ok": True}

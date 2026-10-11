@@ -390,6 +390,25 @@
     </div>
 
     <div class="card" style="max-width:540px">
+      <h2>Atomicmail.io signup (manual captcha)</h2>
+      <p class="muted small">atomicmail.io is accepted by PornoLab and needs no phone number, but its
+         signup is gated by hCaptcha, which the automated browser can't clear on its own. Click
+         "Start" to create a fresh inbox up to the captcha, then click the matching tiles directly on
+         the image below and hit Verify. Repeat if another round appears; once it clears, the account
+         is registered on PornoLab automatically.</p>
+      <div class="form-actions">
+        <button type="button" class="btn" id="atomicmailStartBtn">Start</button>
+        <button type="button" class="btn" id="atomicmailVerifyBtn" hidden>Verify</button>
+        <button type="button" class="btn" id="atomicmailCancelBtn" hidden>Cancel</button>
+      </div>
+      <div id="atomicmailPrompt" class="muted small" hidden></div>
+      <div id="atomicmailImageWrap" hidden style="margin-top:.5rem;line-height:0">
+        <img id="atomicmailImage" style="max-width:100%;cursor:crosshair;border:1px solid var(--border,#444)">
+      </div>
+      <div id="atomicmailStatus" class="muted small" hidden></div>
+    </div>
+
+    <div class="card" style="max-width:540px">
       <h2>Manual registration</h2>
       <p class="muted small">Fill in the form, then click "Get captcha" to load the verification
          image. Enter the code and submit. An activation email will be sent to the address you provide.</p>

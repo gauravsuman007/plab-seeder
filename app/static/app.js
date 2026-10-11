@@ -806,6 +806,121 @@ function initFullAuto() {
   });
 }
 
+// ---------------------------------------------- atomicmail.io (manual captcha)
+function initAtomicmail() {
+  const startBtn = $("#atomicmailStartBtn");
+  const verifyBtn = $("#atomicmailVerifyBtn");
+  const cancelBtn = $("#atomicmailCancelBtn");
+  const promptEl = $("#atomicmailPrompt");
+  const imageWrap = $("#atomicmailImageWrap");
+  const img = $("#atomicmailImage");
+  const statusEl = $("#atomicmailStatus");
+
+  let sessionId = null;
+  const clicks = [];
+
+  function reset() {
+    sessionId = null;
+    clicks.length = 0;
+    startBtn.hidden = false;
+    verifyBtn.hidden = true;
+    cancelBtn.hidden = true;
+    promptEl.hidden = true;
+    imageWrap.hidden = true;
+  }
+
+  function showChallenge(data) {
+    sessionId = data.session_id || sessionId;
+    clicks.length = 0;
+    img.src = "data:image/png;base64," + data.image;
+    promptEl.textContent = data.prompt || "Click the matching tile(s), then Verify.";
+    promptEl.hidden = false;
+    imageWrap.hidden = false;
+    startBtn.hidden = true;
+    verifyBtn.hidden = false;
+    cancelBtn.hidden = false;
+  }
+
+  img.addEventListener("click", async (ev) => {
+    if (!sessionId) return;
+    const rect = img.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) / rect.width;
+    const y = (ev.clientY - rect.top) / rect.height;
+    clicks.push([x, y]);
+    statusEl.hidden = false;
+    statusEl.textContent = `${clicks.length} click(s) queued — click more tiles or hit Verify.`;
+    try {
+      await api("POST", "/api/atomicmail/signup/click", { session_id: sessionId, x, y });
+    } catch (e) {
+      statusEl.textContent = `Error registering click: ${e.message}`;
+    }
+  });
+
+  startBtn.addEventListener("click", async () => {
+    startBtn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = "Starting signup, filling the form…";
+    try {
+      const res = await api("POST", "/api/atomicmail/signup/start", {});
+      if (res.solved_without_challenge) {
+        statusEl.textContent = res.ok
+          ? `✓ No captcha needed this time — account created: ${res.email}`
+          : `Signup ended unexpectedly: ${res.error || "unknown state"}`;
+        reset();
+      } else {
+        showChallenge(res);
+        statusEl.textContent = `Account in progress: ${res.email} — solve the captcha above.`;
+      }
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+      startBtn.hidden = false;
+    } finally {
+      startBtn.disabled = false;
+    }
+  });
+
+  verifyBtn.addEventListener("click", async () => {
+    if (!sessionId) return;
+    verifyBtn.disabled = true;
+    statusEl.hidden = false;
+    statusEl.textContent = "Submitting…";
+    try {
+      const res = await api("POST", "/api/atomicmail/signup/verify", { session_id: sessionId });
+      if (res.solved || (res.ok && res.account_id)) {
+        statusEl.textContent = res.activated
+          ? `✓ Registered and activated: ${res.username} (${res.email})`
+          : `✓ Registered: ${res.username} (${res.email}) — activation pending.`;
+        currentAccountId = res.account_id;
+        localStorage.setItem("accountId", String(currentAccountId));
+        await loadAccountSwitcher();
+        await refreshState();
+        reset();
+      } else if (res.image) {
+        showChallenge(res);
+        statusEl.textContent = "Another round — solve the new image and Verify again.";
+      } else if (res.done) {
+        statusEl.textContent = `Failed: ${res.error || "giving up"}.`;
+        reset();
+      } else {
+        statusEl.textContent = res.error || "Not solved yet — try again.";
+      }
+    } catch (e) {
+      statusEl.textContent = `Error: ${e.message}`;
+    } finally {
+      verifyBtn.disabled = false;
+    }
+  });
+
+  cancelBtn.addEventListener("click", async () => {
+    if (sessionId) {
+      try { await api("POST", "/api/atomicmail/signup/cancel", { session_id: sessionId }); } catch (e) { /* ignore */ }
+    }
+    statusEl.hidden = false;
+    statusEl.textContent = "Cancelled.";
+    reset();
+  });
+}
+
 // ----------------------------------------------------------------- accounts
 async function loadAccounts() {
   const accounts = await api("GET", "/api/accounts");
@@ -934,6 +1049,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initRegister();
   initEmailFactory();
   initFullAuto();
+  initAtomicmail();
   await loadAccountSwitcher();
   initPoll();
 });

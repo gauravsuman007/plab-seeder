@@ -617,6 +617,13 @@ async def register_auto(request: Request):
         _fail(ValueError(f"unknown provider {provider!r}"))
         return  # unreachable, keeps type checkers happy
 
+    return await _register_pornolab_with_email(email, email_password, provider)
+
+
+async def _register_pornolab_with_email(email: str, email_password: str, provider: str) -> dict:
+    """Register a new PornoLab account against an already-created inbox,
+    retrying on captcha/username failures, then add it to the `accounts`
+    table and (for providers with automated inbox reading) activate it."""
     username = _rand_username()
     password = _rand_password()
     last_error = None
@@ -844,6 +851,93 @@ async def email_inbox(account_id: int):
     if not d.get("ok"):
         _fail(ValueError(d.get("error") or "inbox listing failed"), 502)
     return {"ok": True, "messages": d.get("messages", [])}
+
+
+@app.post("/api/atomicmail/signup/start")
+async def atomicmail_signup_start():
+    """Start an interactive atomicmail.io signup. atomicmail.io is accepted
+    by PornoLab's registration form (confirmed live) and has no phone
+    requirement, but its final step is gated by hCaptcha, which doesn't
+    auto-clear the way Cloudflare Turnstile does — so this hands the real
+    challenge screenshot back to the owner to click through, via
+    /api/atomicmail/signup/click and /verify below."""
+    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+    if not sidecar:
+        _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
+    try:
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(f"{sidecar.rstrip('/')}/atomicmail/signup/start")
+            r.raise_for_status()
+            d = r.json()
+    except httpx.HTTPError as e:
+        _fail(e, 502)
+    if not d.get("ok"):
+        _fail(ValueError(d.get("error") or "atomicmail signup failed to start"), 502)
+    return d
+
+
+@app.post("/api/atomicmail/signup/click")
+async def atomicmail_signup_click(request: Request):
+    b = await _body(request)
+    session_id = b.get("session_id") or ""
+    if not session_id:
+        _fail(ValueError("session_id is required"))
+    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+    if not sidecar:
+        _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{sidecar.rstrip('/')}/atomicmail/signup/click", json={
+                "session_id": session_id, "x": b.get("x"), "y": b.get("y"),
+            })
+            r.raise_for_status()
+            d = r.json()
+    except httpx.HTTPError as e:
+        _fail(e, 502)
+    if not d.get("ok"):
+        _fail(ValueError(d.get("error") or "click failed"), 502)
+    return d
+
+
+@app.post("/api/atomicmail/signup/verify")
+async def atomicmail_signup_verify(request: Request):
+    b = await _body(request)
+    session_id = b.get("session_id") or ""
+    if not session_id:
+        _fail(ValueError("session_id is required"))
+    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+    if not sidecar:
+        _fail(ValueError("TURNSTILE_SIDECAR_URL not set"))
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(f"{sidecar.rstrip('/')}/atomicmail/signup/verify", json={
+                "session_id": session_id,
+            })
+            r.raise_for_status()
+            d = r.json()
+    except httpx.HTTPError as e:
+        _fail(e, 502)
+    if not d.get("ok"):
+        _fail(ValueError(d.get("error") or "verify failed"), 502)
+    if d.get("solved"):
+        # hCaptcha cleared and atomicmail.io finished creating the inbox —
+        # hand it straight to the PornoLab registration pipeline.
+        return await _register_pornolab_with_email(d["email"], d["password"], "atomicmail")
+    return d
+
+
+@app.post("/api/atomicmail/signup/cancel")
+async def atomicmail_signup_cancel(request: Request):
+    b = await _body(request)
+    session_id = b.get("session_id") or ""
+    sidecar = os.environ.get("TURNSTILE_SIDECAR_URL")
+    if session_id and sidecar:
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                await c.post(f"{sidecar.rstrip('/')}/atomicmail/signup/cancel", json={"session_id": session_id})
+        except httpx.HTTPError:
+            pass
+    return {"ok": True}
 
 
 @app.get("/api/events")
