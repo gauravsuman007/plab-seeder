@@ -102,6 +102,26 @@
 
       </div>
 
+      <div class="card">
+        <h2>Fake upload credit</h2>
+        <p class="muted small">Inflates the <code>uploaded</code> counter reported to the tracker
+          on every announce, even when qBittorrent isn't transferring data.  Each announce uses a
+          randomised delta so the pattern looks like real bursty traffic; the daily total averages
+          within ±10&nbsp;% of the hourly rate set below.
+          <strong>Detection risk — owner's call.</strong></p>
+        <div class="form-grid">
+          <label class="checkbox-row">
+            <input type="checkbox" id="fakeUploadToggle">
+            <span>Enable fake upload credit <strong>(ban risk — owner's call)</strong></span>
+          </label>
+          <label>Hourly rate (MB/hr)
+            <input type="number" id="fakeUploadRate" min="1" step="1" value="250" style="width:7rem">
+          </label>
+          <button type="button" class="btn small" id="fakeUploadSaveBtn">Save rate</button>
+          <span class="form-msg" id="fakeUploadMsg"></span>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h2>Today vs. yesterday</h2>
@@ -284,6 +304,7 @@
             <label>Disk budget (GB) <input type="number" name="disk_budget_gb" min="0"></label>
           </div>
         </div>
+
 
       </div>
       <div class="form-actions">

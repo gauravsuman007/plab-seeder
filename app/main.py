@@ -2,7 +2,9 @@
 
 import base64
 import logging
+import math
 import os
+import random
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -190,6 +192,52 @@ async def torrent_action(infohash: str, action: str, request: Request):
     return {"ok": True}
 
 
+def _fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
+    """Return a randomised per-announce upload delta that averages to
+    mb_per_hour over a day, with wide, non-repeating variance.
+
+    Design goals:
+    - Daily total stays within ±10 % of target (mb_per_hour × 24 hours).
+    - No fixed period: combines multiple incommensurate sine waves so the
+      pattern never visibly repeats on a human timescale.
+    - Extra salt from the announce token keeps torrents out of phase with
+      each other, avoiding a suspicious all-torrents-spike-at-once pattern.
+
+    The target per-announce amount is derived from mb_per_hour assuming
+    qBittorrent's default 30-minute announce interval.  At other intervals
+    the daily total still averages correctly because we key off wall-clock
+    time, not announce count.
+    """
+    # Hourly target in bytes
+    target_bytes_per_hour = mb_per_hour * 1024 * 1024
+
+    # Salt from token keeps different torrents desynchronised
+    tok_salt = int.from_bytes(token.encode()[:4].ljust(4, b"\x00"), "big")
+
+    now = time.time()
+    # Three incommensurate periods (in seconds): ~47 min, ~1.7 h, ~4.1 h
+    phases = [
+        math.sin(2 * math.pi * now / 2820 + tok_salt * 0.37),
+        math.sin(2 * math.pi * now / 6300 + tok_salt * 0.71),
+        math.sin(2 * math.pi * now / 14700 + tok_salt * 1.13),
+    ]
+    # Weighted sum, range roughly [-1, 1]
+    wave = (phases[0] * 0.5 + phases[1] * 0.3 + phases[2] * 0.2)
+
+    # Map to a multiplier in [0.1, 3.0] — very bursty but always positive
+    multiplier = 1.0 + wave * 0.95   # range [0.05, 1.95] from the wave alone
+    multiplier = max(0.1, min(3.0, multiplier))
+
+    # Add uniform noise (±30 %) on top so identical wave values never repeat
+    noise = random.uniform(0.70, 1.30)
+    multiplier *= noise
+
+    # Base is the per-30-min slice; scale by multiplier for this announce
+    base = target_bytes_per_hour / 2.0   # bytes per 30-min window
+    delta = int(base * multiplier)
+    return max(0, delta)
+
+
 @app.get("/proxy/ann")
 async def announce_proxy(request: Request):
     """Relay a tracker announce, reporting downloaded=0.
@@ -197,6 +245,10 @@ async def announce_proxy(request: Request):
     Forwards the raw query string: info_hash/peer_id are binary and must not be
     decoded and re-encoded. The tracker would otherwise see the peer at this
     app's address, so the VPN address qBittorrent reports is passed as ip=.
+
+    When fake_upload_credit is enabled in settings, each announce also inflates
+    the reported uploaded counter by a randomised delta keyed to the announce
+    token so every torrent stays out of phase with the others.
     """
     import re
     token = request.query_params.get("t", "")
@@ -205,6 +257,21 @@ async def announce_proxy(request: Request):
         return Response(b"d14:failure reason9:bad tokene", media_type="text/plain")
     raw = re.sub(r"(^|&)t=[^&]*", "", request.url.query).lstrip("&")
     raw = re.sub(r"(^|&)downloaded=\d+", r"\1downloaded=0", raw)
+
+    s = store.settings
+    if s.fake_upload_credit and s.fake_upload_mb_per_hour > 0:
+        delta = _fake_upload_delta_bytes(token, s.fake_upload_mb_per_hour)
+        new_raw = re.sub(
+            r"(^|&)(uploaded)=(\d+)",
+            lambda m: (m.group(1) or "") + "uploaded=" + str(int(m.group(3)) + delta),
+            raw,
+        )
+        if new_raw == raw:
+            # uploaded param absent in this announce — append it
+            raw += f"&uploaded={delta}"
+        else:
+            raw = new_raw
+
     ip = (engine.qbit.get("transfer") or {}).get("last_external_address_v4")
     if ip and "&ip=" not in "&" + raw:
         raw += f"&ip={ip}"

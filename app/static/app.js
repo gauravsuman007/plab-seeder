@@ -98,6 +98,8 @@ function renderPills(s) {
   $("#statusPills").innerHTML = pills.join("");
   $("#autoToggle").checked = !!s.auto;
   $("#guardOverrideToggle").checked = !!s.guard_override;
+  $("#fakeUploadToggle").checked = !!s.fake_upload_credit;
+  if (s.fake_upload_mb_per_hour != null) $("#fakeUploadRate").value = s.fake_upload_mb_per_hour;
 }
 
 function pill(label, ok, detail) {
@@ -247,6 +249,44 @@ function initLogin() {
     } catch (e) {
       ev.target.checked = !ev.target.checked;
       toast(e.message, "err");
+    }
+  });
+
+  $("#fakeUploadToggle").addEventListener("change", async (ev) => {
+    if (ev.target.checked && !confirm(
+      "This makes the tracker believe you are uploading even when qBittorrent " +
+      "isn't seeding. PornoLab may detect this and ban the account. " +
+      "Enable anyway?"
+    )) {
+      ev.target.checked = false;
+      return;
+    }
+    try {
+      await api("POST", "/api/settings", { fake_upload_credit: ev.target.checked });
+      const msg = $("#fakeUploadMsg");
+      msg.textContent = ev.target.checked ? "Enabled." : "Disabled.";
+      msg.className = "form-msg " + (ev.target.checked ? "warn" : "ok");
+      await refreshState();
+    } catch (e) {
+      ev.target.checked = !ev.target.checked;
+      const msg = $("#fakeUploadMsg");
+      msg.textContent = e.message;
+      msg.className = "form-msg err";
+    }
+  });
+
+  $("#fakeUploadSaveBtn").addEventListener("click", async () => {
+    const rate = parseInt($("#fakeUploadRate").value, 10);
+    const msg = $("#fakeUploadMsg");
+    if (!rate || rate < 1) { msg.textContent = "Enter a valid rate."; msg.className = "form-msg err"; return; }
+    try {
+      await api("POST", "/api/settings", { fake_upload_mb_per_hour: rate });
+      msg.textContent = "Rate saved.";
+      msg.className = "form-msg ok";
+      await refreshState();
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.className = "form-msg err";
     }
   });
 

@@ -69,6 +69,15 @@ class Settings:
     idle_hours: int = 48                            # no upload for this long -> removable
     disk_budget_gb: int = 50
 
+    # Fake upload credit (off by default — ban risk; owner's call).
+    # Each announce injects a randomised delta so the tracker sees growing
+    # upload even when qBittorrent isn't seeding.  The daily total averages
+    # within ±10 % of fake_upload_mb_per_hour × 24.  The variance is wide and
+    # intentionally irregular so announce-to-announce deltas look like real
+    # bursty traffic rather than a synthetic clock signal.
+    fake_upload_credit: bool = False
+    fake_upload_mb_per_hour: int = 250
+
 
 SECRET_FIELDS = {"qbit_password", "pornolab_password", "sms_activate_api_key"}
 
