@@ -1,32 +1,54 @@
 """
 GMX / web.de account factory.
 
-Creates free @gmx.net / @web.de email accounts automatically using patchright.
-These are legitimate German email providers (IONOS/1&1 group) with clean MX
-servers not on any DNSBL, and whose domains are not on the disposable-email
-blocklist.
+DEAD END (2026-10-11): web.de registration REQUIRES a mobile phone number.
+----------------------------------------------------------------------------
+The full flow was mapped end to end in camoufox and the last step is a hard
+phone gate.  Do not spend time here again unless web.de changes the flow.
 
-Registration requires:
-  - First name, last name
-  - Desired login (username part of the address)
-  - Password
-  - Date of birth (day / month / year)
-  - A simple image captcha (solved with ddddocr / Claude vision)
-  - No phone number
+What was learned (all verified live from a German IP, Deutsche Telekom AS3320):
 
-Verified to work from a German IP (Deutsche Telekom AS3320).  From other
-countries you may get a "bailout" redirect — try web.de first (it tends to be
-more lenient than gmx.com).
+  * Signup URL is https://register.web.de/ — NOT https://web.de/registrieren/
+    (that 404s).
 
-IMAP access: imap.gmx.net:993 (SSL), also works for @web.de.
-SMTP: mail.gmx.net:587 (STARTTLS) or :465 (SSL).
+  * register.web.de bounces to hilfe.web.de/kundenservice/flexreg.html unless
+    the browser already holds web.de consent cookies.  Load https://web.de/
+    first, click "Akzeptieren und weiter", THEN navigate to register.web.de.
+
+  * The gate on step 1 is CaptchaFox (div#captchafox, response field
+    textarea[name="cf-captcha-response"]) — NOT Cloudflare Turnstile, despite
+    the "cf-" prefix.  The turnstile-solver sidecar does not apply.
+
+  * patchright (even headful under Xvfb) never clears CaptchaFox: submitting
+    gives "Bitte löse das Captcha."  camoufox DOES clear it, usually silently
+    via `humanize` without ever populating the response field, but it is flaky
+    — budget ~2 attempts, clicking the widget between tries.
+
+  * Form is a multi-step React wizard.  Fields must be filled by clicking each
+    one and typing (keyboard.type); .fill() does not fire React's onChange and
+    Tab-order skips fields.  Steps:
+        1. firstName, lastName, birthDay, birthMonth, birthYear   [CaptchaFox]
+        2. gender (radio FEMALE/MALE/OTHER), postalCode, city, street
+           (city autofills from postalCode)
+        3. password, confirmPassword; the address itself is assigned by web.de
+           and held in a hidden readonly input[name="username"]
+           (e.g. "sophie.schneider1992@web.de")
+        4+. mobilePhone + mobilePhonePrefix  <-- HARD REQUIREMENT, NOT SKIPPABLE
+            Only back/next buttons and footer links exist on that step; an
+            empty submit returns "Please fill in all required fields."
+
+gmx.net is the same IONOS/1&1 backend and is assumed to gate identically.
+
+IMAP (kept for whenever an account exists by other means):
+  imap.web.de:993 / imap.gmx.net:993 (SSL)
+  SMTP: mail.gmx.net:587 (STARTTLS) or :465 (SSL)
 
 Usage
 -----
 from app.gmx import GmxFactory, gmx_find_activation
 
 factory = GmxFactory(provider="web.de")      # or "gmx.net"
-email, password = await factory.create()     # -> ("abc123@web.de", "Xk9f3w2q!mN5")
+email, password = await factory.create()     # raises at the phone step
 
 url = await gmx_find_activation(email, password, timeout=300)
 """
