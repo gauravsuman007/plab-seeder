@@ -34,6 +34,17 @@ services:
       - "${QBIT_PEER_PORT:-6881}:6881"
       - "${QBIT_PEER_PORT:-6881}:6881/udp"
     restart: unless-stopped
+    healthcheck:
+      # tailscaled responding at all (any backend state, including
+      # logged-out) -- not "logged in" or "exit node set", which the UI
+      # treats as normal, optional states. A host that can't grant
+      # NET_ADMIN/the TUN device fails here loudly instead of leaving
+      # app/qbit silently stuck on a half-started network namespace.
+      test: ["CMD", "tailscale", "status"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -49,7 +60,8 @@ services:
       - ./deploy/qbit-init/10-whitelist:/custom-cont-init.d/10-whitelist:ro
     network_mode: "service:tailscale"
     depends_on:
-      - tailscale
+      tailscale:
+        condition: service_healthy
     restart: unless-stopped
 
   pornolab-seeder:
@@ -71,7 +83,8 @@ services:
       - tailscale-socket:/var/run/tailscale:ro
     network_mode: "service:tailscale"
     depends_on:
-      - tailscale
+      tailscale:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
