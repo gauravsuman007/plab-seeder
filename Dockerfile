@@ -2,10 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# xvfb is needed for the patchright fallback stage (headful Chromium under
-# a virtual framebuffer). camoufox lives in the sidecar image now.
+# No browser here any more -- registration (camoufox/patchright/Xvfb) moved
+# to the separate plab-register service, which owns the only browser in the
+# deployment. This image is just the seeding app + the tailscale CLI.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        xvfb curl \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Tailscale CLI only (no tailscaled here) -- this talks to the tailscale
@@ -22,8 +23,7 @@ RUN TS_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo amd64) \
     && rm -rf /tmp/ts.tgz "/tmp/tailscale_1.102.5_${TS_ARCH}"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m patchright install --with-deps chromium
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 

@@ -27,9 +27,7 @@
   <button class="tab" data-tab="torrents">Torrents</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="accounts">Accounts</button>
-  <button class="tab" data-tab="emails">Emails</button>
   <button class="tab" data-tab="events">Events</button>
-  <button class="tab" data-tab="register">Register</button>
 </nav>
 
 <main>
@@ -221,44 +219,13 @@
           <h2>PornoLab site</h2>
           <div class="form-grid">
             <label>Site URL <input type="text" name="pornolab_url"></label>
-          </div>
-          <p class="muted small">Account credentials are set from the Dashboard's login card, not here.</p>
-        </div>
-
-        <div class="card">
-          <h2>Email account factory</h2>
-          <p class="muted small">Powers "Full automation" and "New email" on the Register tab.
-             Tuta is the only option that's actually phone-free: no phone, no
-             captcha. GMX/web.de and gmx.net both require a phone at the final
-             registration step despite initial appearances — kept only in case
-             that changes. mail.ru requires an sms-activate.org key (~$0.10/number).</p>
-          <div class="form-grid">
-            <label>Provider
-              <select name="email_factory_provider">
-                <option value="tuta">Tuta / tutamail.com (no phone, no captcha)</option>
-                <option value="gmx">GMX / web.de (requires phone — dead end)</option>
-                <option value="mailru">mail.ru (phone via sms-activate.org)</option>
-              </select>
-            </label>
-            <label>GMX sub-provider
-              <select name="gmx_provider">
-                <option value="web.de">web.de</option>
-                <option value="gmx.net">gmx.net</option>
-              </select>
-            </label>
-            <label>mail.ru domain (mailru provider only)
-              <select name="mailru_domain">
-                <option value="mail.ru">mail.ru</option>
-                <option value="bk.ru">bk.ru</option>
-                <option value="inbox.ru">inbox.ru</option>
-                <option value="list.ru">list.ru</option>
-              </select>
-            </label>
-            <label>sms-activate.org API key (mailru only)
-              <input type="password" name="sms_activate_api_key" autocomplete="new-password"
-                     placeholder="•••••••• (unchanged)">
+            <label>plab-register URL
+              <input type="text" name="register_url" placeholder="http://192.168.2.100:8020">
             </label>
           </div>
+          <p class="muted small">Account credentials are set from the Dashboard's login card, not here.
+             New accounts are created from <b>plab-register</b> (a separate service) — set its URL
+             above to show the "Create a new account" link on the Accounts tab.</p>
         </div>
 
         <div class="card" id="tailscaleCard">
@@ -387,10 +354,15 @@
     <div class="card">
       <div class="card-head">
         <h2>Accounts</h2>
-        <button class="btn small" id="refreshAccountsBtn">Refresh</button>
+        <div class="card-head-actions">
+          <a class="btn small primary" id="createAccountLink" href="#" target="_blank" rel="noopener" hidden>+ Create a new account</a>
+          <button class="btn small" id="refreshAccountsBtn">Refresh</button>
+        </div>
       </div>
       <p class="muted small">Every PornoLab + email account pair this app has ever created. Credentials
-         are masked by default — click "Show" to reveal them for copying. Accounts are never deleted here.</p>
+         are masked by default — click "Show" to reveal them for copying. Accounts are never deleted here.
+         New accounts are created from <b>plab-register</b> (a separate service) and appear here once
+         registered.</p>
       <div class="table-wrap">
         <table class="table" id="accountsTable">
           <thead>
@@ -402,135 +374,6 @@
           <tbody></tbody>
         </table>
       </div>
-    </div>
-  </section>
-
-  <!-- ============================= EMAILS ============================= -->
-  <section class="panel" id="panel-emails">
-    <div class="card">
-      <div class="card-head">
-        <h2>Emails</h2>
-        <button class="btn small" id="refreshEmailsBtn">Refresh</button>
-      </div>
-      <p class="muted small">Email accounts created but not yet tied to a PornoLab registration.
-         Create one from a provider below, check its inbox, register it on PornoLab when you're
-         ready, or delete it if it stops being able to log in.</p>
-      <div class="form-actions" style="margin-bottom:.75rem">
-        <select id="emailsProviderSelect"></select>
-        <button type="button" class="btn" id="emailsNewBtn">New email</button>
-      </div>
-      <div id="emailsStatus" class="muted small" hidden></div>
-      <div class="table-wrap">
-        <table class="table" id="emailsTable">
-          <thead>
-            <tr>
-              <th>Provider</th><th>Address</th><th>Password</th><th>Created</th><th>Inbox</th><th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card" style="max-width:540px">
-      <h2>Atomicmail.io (manual captcha)</h2>
-      <p class="muted small">atomicmail.io needs no phone number, but its signup is gated by hCaptcha,
-         which the automated browser can't clear on its own. Click "Start" to create a fresh inbox up
-         to the captcha, then click the matching tiles directly on the image below and hit Verify.
-         Repeat if another round appears; once it clears, the email is added to the list above.</p>
-      <div class="form-actions">
-        <button type="button" class="btn" id="atomicmailStartBtn">Start</button>
-        <button type="button" class="btn" id="atomicmailVerifyBtn" hidden>Verify</button>
-        <button type="button" class="btn" id="atomicmailCancelBtn" hidden>Cancel</button>
-      </div>
-      <div id="atomicmailPrompt" class="muted small" hidden></div>
-      <div id="atomicmailImageWrap" hidden style="margin-top:.5rem;line-height:0">
-        <img id="atomicmailImage" draggable="false"
-             style="max-width:100%;cursor:crosshair;border:1px solid var(--border,#444);
-                    touch-action:manipulation;user-select:none;-webkit-user-drag:none">
-      </div>
-      <div id="atomicmailStatus" class="muted small" hidden></div>
-    </div>
-
-    <div class="card" id="emailsInboxCard" hidden style="max-width:540px">
-      <div class="card-head">
-        <h2>Inbox</h2>
-        <button class="btn small" id="emailsInboxCloseBtn">Close</button>
-      </div>
-      <div id="emailsInboxAddress" class="muted small"></div>
-      <div class="table-wrap">
-        <table class="table" id="emailsInboxTable">
-          <thead><tr><th>From</th><th>Subject</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================ REGISTER ============================ -->
-  <section class="panel" id="panel-register">
-    <div class="card" style="max-width:540px">
-      <h2>Full automation</h2>
-      <p class="muted small">Creates an email account, registers a new PornoLab account with it, and
-         (for Tuta) activates it automatically — retrying the captcha up to 10 times if needed. The
-         new account is added to the switcher above and the Accounts tab even if automatic activation
-         doesn't complete; check that account's email inbox to finish by hand if so.</p>
-      <div class="form-actions">
-        <button type="button" class="btn primary" id="fullAutoBtn">Create &amp; register a new account</button>
-      </div>
-      <div id="fullAutoStatus" class="muted small" hidden></div>
-    </div>
-
-    <div class="card" style="max-width:540px">
-      <h2>Manual registration</h2>
-      <p class="muted small">Fill in the form, then click "Get captcha" to load the verification
-         image. Enter the code and submit. An activation email will be sent to the address you provide.</p>
-      <p class="muted small" style="color:var(--warn,#b45309)">⚠ PornoLab blocks all disposable/temporary email services.
-         Use a real address, or click <strong>New email</strong> to auto-create one
-         (GMX/web.de: no phone needed; mail.ru: requires sms-activate key in Settings).</p>
-
-      <form id="registerForm" class="form-grid">
-        <label>Username *
-          <div style="display:flex;gap:.5rem">
-            <input type="text" name="username" autocomplete="username" required style="flex:1">
-            <button type="button" class="btn small" id="regRandomBtn" title="Generate random username &amp; password">Random</button>
-          </div>
-        </label>
-        <label>Password * <span class="muted small">(max 20 chars)</span>
-          <input type="password" name="password" autocomplete="new-password" maxlength="20" required>
-        </label>
-        <label>Email *
-          <div style="display:flex;gap:.5rem;align-items:flex-start;flex-wrap:wrap">
-            <input type="email" name="email" autocomplete="email" required style="flex:1;min-width:180px">
-            <button type="button" class="btn small" id="regEmailBtn" title="Auto-create an email account (GMX/web.de or mail.ru)">New email</button>
-          </div>
-          <div id="regEmailStatus" class="muted small" hidden></div>
-        </label>
-
-        <label>Country
-          <select name="country" id="regCountry"></select>
-        </label>
-        <label>Timezone
-          <select name="timezone" id="regTimezone"></select>
-        </label>
-
-        <div class="form-actions">
-          <button type="button" class="btn" id="regGetCaptchaBtn">Get captcha</button>
-        </div>
-
-        <div id="regCaptchaBlock" hidden>
-          <img id="regCaptchaImg" alt="captcha" style="border:1px solid var(--border);border-radius:4px">
-          <label>Captcha code *
-            <input type="text" name="captcha" autocomplete="off" required>
-          </label>
-          <p class="muted small" id="regTurnstileNote"></p>
-        </div>
-
-        <div class="form-actions" id="regSubmitRow" hidden>
-          <button type="submit" class="btn primary">Register</button>
-          <span class="form-msg" id="regMsg"></span>
-        </div>
-      </form>
     </div>
   </section>
 

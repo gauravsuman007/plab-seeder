@@ -44,16 +44,10 @@ class GlobalSettings:
 
     pornolab_url: str = "https://pornolab.net"
 
-    # Email account factory — about which TOOL creates throwaway inboxes, not
-    # which PornoLab account is active, so this stays global.
-    # "tuta" is the only one that's actually phone-free end to end: web.de/
-    # gmx.net require a phone at the final registration step (see app/gmx.py's
-    # module docstring) and mail.ru requires one via VK ID. Kept as options in
-    # case either provider drops its phone gate later.
-    email_factory_provider: str = "tuta"   # "tuta" (no phone) | "gmx" (needs phone) | "mailru" (needs sms-activate key)
-    gmx_provider: str = "web.de"           # "web.de" or "gmx.net"
-    sms_activate_api_key: str = ""          # sms-activate.org key (only needed for mailru provider)
-    mailru_domain: str = "mail.ru"          # @mail.ru | @bk.ru | @inbox.ru | @list.ru
+    # Where the plab-register deployment lives, for the "create a new
+    # account" link -- registration/email-factory automation isn't part of
+    # this app any more (see plab-register), this just points at it.
+    register_url: str = os.environ.get("REGISTER_URL", "")
 
 
 @dataclass
@@ -111,7 +105,7 @@ class Settings(GlobalSettings, AccountSettings):
     pass
 
 
-GLOBAL_SECRET_FIELDS = {"qbit_password", "sms_activate_api_key"}
+GLOBAL_SECRET_FIELDS = {"qbit_password"}
 ACCOUNT_SECRET_FIELDS = {"pornolab_password"}
 SECRET_FIELDS = GLOBAL_SECRET_FIELDS | ACCOUNT_SECRET_FIELDS     # kept for callers that don't care which
 
@@ -235,14 +229,6 @@ create table if not exists events (
     level text,
     message text
 );
-create table if not exists emails (
-    id integer primary key autoincrement,
-    provider text not null,
-    address text not null,
-    password text not null,
-    created_at real,
-    note text default ''
-);
 """
 
 
@@ -264,6 +250,11 @@ class DB:
                 cols = {r["name"] for r in self.conn.execute(f"pragma table_info({table})")}
                 if "account_id" not in cols:
                     self.conn.execute(f"alter table {table} add column account_id integer not null default 1")
+            # The standalone "emails" registry moved to plab-register along
+            # with the rest of the registration/email-factory flow -- drop
+            # it on upgrade rather than carrying a dead table forever.
+            # Confirmed empty in production before this migration shipped.
+            self.conn.execute("drop table if exists emails")
             self.conn.commit()
 
     def execute(self, sql: str, args=()) -> sqlite3.Cursor:
@@ -300,24 +291,6 @@ class DB:
     def set_account_first_download(self, account_id: int, token: str) -> None:
         self.execute("update accounts set first_download_at=?, first_download_token=? where id=?",
                      (time.time(), token, account_id))
-
-    # -- emails (standalone, not yet tied to a PornoLab account) --------- #
-    def list_emails(self) -> list[dict]:
-        return self.rows("select id, provider, address, created_at, note from emails order by id desc")
-
-    def get_email(self, email_id: int) -> dict | None:
-        rows = self.rows("select * from emails where id=?", (email_id,))
-        return rows[0] if rows else None
-
-    def create_email(self, *, provider: str, address: str, password: str, note: str = "") -> int:
-        cur = self.execute(
-            "insert into emails(provider, address, password, created_at, note) values (?,?,?,?,?)",
-            (provider, address, password, time.time(), note),
-        )
-        return cur.lastrowid
-
-    def delete_email(self, email_id: int) -> None:
-        self.execute("delete from emails where id=?", (email_id,))
 
     # -- meta (baselines) ------------------------------------------------ #
     def meta(self, account_id: int, key: str) -> str | None:

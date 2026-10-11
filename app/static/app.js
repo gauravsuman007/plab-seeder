@@ -108,10 +108,9 @@ function initAccountSwitcher() {
   $("#accountSwitcher").addEventListener("change", async (ev) => {
     if (ev.target.value === "__new__") {
       ev.target.value = String(currentAccountId);   // revert the select
-      $$(".tab").forEach(b => b.classList.remove("active"));
-      $$(".panel").forEach(p => p.classList.remove("active"));
-      $('.tab[data-tab="register"]').classList.add("active");
-      $("#panel-register").classList.add("active");
+      const s = await api("GET", "/api/settings").catch(() => ({}));
+      if (s.register_url) window.open(s.register_url, "_blank", "noopener");
+      else toast("Set plab-register URL in Settings first.", "err");
       return;
     }
     currentAccountId = parseInt(ev.target.value, 10);
@@ -484,7 +483,7 @@ function renderTorrents(s) {
 // rules), matching app/store.py's GlobalSettings/AccountSettings split —
 // no more guessing which endpoint a field belongs to.
 const LIST_FIELDS = new Set(["exclude_forums"]);
-const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password", "sms_activate_api_key"]);
+const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password"]);
 
 function fillForm(form, s) {
   for (const el of form.elements) {
@@ -735,316 +734,12 @@ function drawHistory(points) {
 function initHistory() {
   $("#historyRange").addEventListener("change", loadHistory);
 }
-
-// --------------------------------------------------------------- registration
-const REG_NAMES = [
-  "alexey","ivan","sergey","dmitry","nikolay","pavel","mikhail","andrey","maxim",
-  "roman","artem","kirill","vitaly","evgeny","igor","oleg","denis","vladislav",
-  "anna","natasha","elena","olga","katya","marina","svetlana","irina","alina",
-  "daria","oksana","tatyana","vitalik","sanya","kostya","dima","nikita","ruslan",
-];
-const REG_SUFFIXES = ["_pro","_ru","_online","_net","_top","_vip","_ok","_kz","_ua"];
-
-function regRandomUsername() {
-  const name = REG_NAMES[Math.floor(Math.random() * REG_NAMES.length)];
-  const r = Math.random();
-  if (r < 0.4) {
-    // name + birth year 1978-2003
-    return name + (1978 + Math.floor(Math.random() * 26));
-  } else if (r < 0.65) {
-    // name + 2-digit number
-    return name + String(Math.floor(Math.random() * 90) + 10);
-  } else if (r < 0.8) {
-    // name + suffix
-    return name + REG_SUFFIXES[Math.floor(Math.random() * REG_SUFFIXES.length)];
-  } else {
-    // name + _ + another name fragment
-    const name2 = REG_NAMES[Math.floor(Math.random() * REG_NAMES.length)];
-    return name + "_" + name2.slice(0, 3 + Math.floor(Math.random() * 3));
-  }
-}
-
-function regRandomPassword() {
-  // 16-char password: letters + digits + symbols, max 20 chars (site limit)
-  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const lower = "abcdefghjkmnpqrstuvwxyz";
-  const digits = "23456789";
-  const syms = "!@#$%&*";
-  const pool = upper + lower + digits + syms;
-  const arr = new Uint8Array(16);
-  crypto.getRandomValues(arr);
-  // guarantee at least one of each class
-  let pw = [
-    upper[arr[0] % upper.length],
-    lower[arr[1] % lower.length],
-    digits[arr[2] % digits.length],
-    syms[arr[3] % syms.length],
-    ...Array.from(arr.slice(4), b => pool[b % pool.length]),
-  ];
-  // Fisher-Yates shuffle
-  for (let i = pw.length - 1; i > 0; i--) {
-    const j = arr[i % arr.length] % (i + 1);
-    [pw[i], pw[j]] = [pw[j], pw[i]];
-  }
-  return pw.join("");
-}
-
-function initRegister() {
-  const getCaptchaBtn = $("#regGetCaptchaBtn");
-  const captchaBlock = $("#regCaptchaBlock");
-  const submitRow = $("#regSubmitRow");
-  const captchaImg = $("#regCaptchaImg");
-  const msg = $("#regMsg");
-  const turnstileNote = $("#regTurnstileNote");
-
-  $("#regRandomBtn").addEventListener("click", () => {
-    const form = $("#registerForm");
-    form.elements["username"].value = regRandomUsername();
-    form.elements["password"].value = regRandomPassword();
-  });
-
-  getCaptchaBtn.addEventListener("click", async () => {
-    getCaptchaBtn.disabled = true;
-    getCaptchaBtn.textContent = "Loading…";
-    msg.textContent = "";
-    try {
-      const res = await api("GET", "/api/register/form");
-
-      const countrySelect = $("#regCountry");
-      countrySelect.innerHTML = res.countries.map(
-        ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
-      ).join("");
-      const ru = countrySelect.querySelector('option[value="181"]');
-      if (ru) ru.selected = true;
-
-      const tzSelect = $("#regTimezone");
-      tzSelect.innerHTML = res.timezones.map(
-        ([v, t]) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`
-      ).join("");
-      const msk = tzSelect.querySelector('option[value="6"]');
-      if (msk) msk.selected = true;
-
-      if (res.turnstile_solved) {
-        turnstileNote.textContent = "✓ Cloudflare bot-check solved.";
-        turnstileNote.className = "muted small ok";
-      } else {
-        turnstileNote.innerHTML =
-          'Cloudflare bot-check not solved. If registration fails, ' +
-          '<a href="https://pornolab.net/forum/profile.php?mode=register" target="_blank">register directly on the site</a>.';
-        turnstileNote.className = "muted small";
-      }
-
-      if (res.captcha) {
-        captchaImg.src = res.captcha;
-        captchaBlock.hidden = false;
-        submitRow.hidden = false;
-        const captchaInput = captchaBlock.querySelector('input[name="captcha"]');
-        if (res.captcha_text) {
-          captchaInput.value = res.captcha_text;
-          captchaInput.style.color = "var(--muted)";
-          captchaInput.title = "Auto-solved by OCR — edit if incorrect";
-        } else {
-          captchaInput.value = "";
-          captchaInput.style.color = "";
-          captchaInput.focus();
-        }
-      } else {
-        msg.textContent = "Captcha image could not be loaded. Try again.";
-        msg.className = "form-msg err";
-      }
-    } catch (e) {
-      msg.textContent = e.message;
-      msg.className = "form-msg err";
-    } finally {
-      getCaptchaBtn.disabled = false;
-      getCaptchaBtn.textContent = "Refresh captcha";
-    }
-  });
-
-  $("#registerForm").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const f = new FormData(ev.target);
-    const payload = {
-      username: f.get("username"),
-      password: f.get("password"),
-      email: f.get("email"),
-      captcha: f.get("captcha"),
-      country: f.get("country"),
-      timezone: f.get("timezone"),
-    };
-    msg.textContent = "Submitting…";
-    msg.className = "form-msg";
-    try {
-      const res = await api("POST", "/api/register", payload);
-      if (res.ok) {
-        msg.textContent = "Registration submitted! Check your email for an activation link.";
-        msg.className = "form-msg ok";
-        captchaBlock.hidden = true;
-        submitRow.hidden = false;
-        ev.target.reset();
-      } else {
-        msg.textContent = res.error || "Registration failed.";
-        msg.className = "form-msg err";
-        getCaptchaBtn.click();   // auto-refresh captcha on failure
-      }
-    } catch (e) {
-      msg.textContent = e.message;
-      msg.className = "form-msg err";
-    }
-  });
-}
-
-
-// ------------------------------------------------------------- full automation
-function initFullAuto() {
-  const btn = $("#fullAutoBtn");
-  const statusEl = $("#fullAutoStatus");
-
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    statusEl.hidden = false;
-    statusEl.textContent = "Creating email, registering PornoLab account, solving captcha " +
-      "(retrying up to 10×)… this can take a couple of minutes.";
-    try {
-      const res = await api("POST", "/api/register/auto", {});
-      statusEl.textContent = res.activated
-        ? `✓ Registered and activated: ${res.username} (${res.email})`
-        : `✓ Registered: ${res.username} (${res.email}) — activation pending, ` +
-          `check the Accounts tab to view the inbox or finish by hand.`;
-      currentAccountId = res.account_id;
-      localStorage.setItem("accountId", String(currentAccountId));
-      await loadAccountSwitcher();
-      await refreshState();
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-}
-
-// ---------------------------------------------- atomicmail.io (manual captcha)
-function initAtomicmail() {
-  const startBtn = $("#atomicmailStartBtn");
-  const verifyBtn = $("#atomicmailVerifyBtn");
-  const cancelBtn = $("#atomicmailCancelBtn");
-  const promptEl = $("#atomicmailPrompt");
-  const imageWrap = $("#atomicmailImageWrap");
-  const img = $("#atomicmailImage");
-  const statusEl = $("#atomicmailStatus");
-
-  let sessionId = null;
-  const clicks = [];
-
-  function reset() {
-    sessionId = null;
-    clicks.length = 0;
-    startBtn.hidden = false;
-    verifyBtn.hidden = true;
-    cancelBtn.hidden = true;
-    promptEl.hidden = true;
-    imageWrap.hidden = true;
-  }
-
-  function showChallenge(data) {
-    sessionId = data.session_id || sessionId;
-    clicks.length = 0;
-    img.src = "data:image/png;base64," + data.image;
-    promptEl.textContent = data.prompt || "Click the matching tile(s), then Verify.";
-    promptEl.hidden = false;
-    imageWrap.hidden = false;
-    startBtn.hidden = true;
-    verifyBtn.hidden = false;
-    cancelBtn.hidden = false;
-  }
-
-  // Use pointerup rather than click -- on some mobile browsers (seen on
-  // Firefox/Android) a native image long-press/drag gesture can swallow the
-  // synthetic click event entirely, so no tap on the challenge ever lands.
-  img.addEventListener("contextmenu", (ev) => ev.preventDefault());
-  img.addEventListener("pointerup", async (ev) => {
-    if (!sessionId) return;
-    ev.preventDefault();
-    const rect = img.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) / rect.width;
-    const y = (ev.clientY - rect.top) / rect.height;
-    clicks.push([x, y]);
-    statusEl.hidden = false;
-    statusEl.textContent = `${clicks.length} click(s) queued — click more tiles or hit Verify.`;
-    try {
-      await api("POST", "/api/atomicmail/signup/click", { session_id: sessionId, x, y });
-    } catch (e) {
-      statusEl.textContent = `Error registering click: ${e.message}`;
-    }
-  });
-
-  startBtn.addEventListener("click", async () => {
-    startBtn.disabled = true;
-    statusEl.hidden = false;
-    statusEl.textContent = "Starting signup, filling the form…";
-    try {
-      const res = await api("POST", "/api/atomicmail/signup/start", {});
-      if (res.solved_without_challenge) {
-        statusEl.textContent = res.ok
-          ? `✓ No captcha needed this time — account created: ${res.email}`
-          : `Signup ended unexpectedly: ${res.error || "unknown state"}`;
-        reset();
-      } else {
-        showChallenge(res);
-        statusEl.textContent = `Account in progress: ${res.email} — solve the captcha above.`;
-      }
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-      startBtn.hidden = false;
-    } finally {
-      startBtn.disabled = false;
-    }
-  });
-
-  verifyBtn.addEventListener("click", async () => {
-    if (!sessionId) return;
-    verifyBtn.disabled = true;
-    statusEl.hidden = false;
-    statusEl.textContent = "Submitting…";
-    try {
-      const res = await api("POST", "/api/atomicmail/signup/verify", { session_id: sessionId });
-      if (res.solved) {
-        statusEl.textContent = `✓ Email created: ${res.email} — added to the list above.`;
-        await loadEmails();
-        reset();
-      } else if (res.image) {
-        showChallenge(res);
-        statusEl.textContent = "Another round — solve the new image and Verify again.";
-      } else if (res.done) {
-        statusEl.textContent = `Failed: ${res.error || "giving up"}.`;
-        reset();
-      } else {
-        statusEl.textContent = res.error || "Not solved yet — try again.";
-      }
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-    } finally {
-      verifyBtn.disabled = false;
-    }
-  });
-
-  cancelBtn.addEventListener("click", async () => {
-    if (sessionId) {
-      try { await api("POST", "/api/atomicmail/signup/cancel", { session_id: sessionId }); } catch (e) { /* ignore */ }
-    }
-    statusEl.hidden = false;
-    statusEl.textContent = "Cancelled.";
-    reset();
-  });
-}
-
-// ----------------------------------------------------------------- accounts
 async function loadAccounts() {
   const accounts = await api("GET", "/api/accounts");
   accountsCache = accounts;
   const tbody = $("#accountsTable tbody");
   if (!accounts.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">No accounts yet — use Register → Full automation.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No accounts yet — create one from plab-register.</td></tr>`;
     return;
   }
   tbody.innerHTML = accounts.map(a => `
@@ -1058,7 +753,6 @@ async function loadAccounts() {
           ${a.first_download_at ? "" : `<span class="badge warn" title="No real download yet — fake-upload-credit stays off until one happens">no download yet</span>`}</td>
       <td class="row-actions">
         <button class="btn small" data-reveal="${a.id}">Show</button>
-        ${a.email_provider === "tuta" ? `<button class="btn small" data-inbox="${a.id}">Check inbox</button>` : ""}
       </td>
     </tr>
   `).join("");
@@ -1078,187 +772,18 @@ async function loadAccounts() {
       }
     });
   });
-
-  $$("#accountsTable [data-inbox]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "Loading…";
-      try {
-        const res = await api("GET", `/api/email/inbox?account_id=${btn.dataset.inbox}`);
-        const list = (res.messages || []).map(m =>
-          `• ${escapeHtml(m.subject || "(no subject)")} — ${escapeHtml(m.from || "")}`
-        ).join("\n") || "(inbox empty)";
-        alert(list);
-      } catch (e) {
-        toast(e.message, "err");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Check inbox";
-      }
-    });
-  });
 }
 
 function initAccounts() {
   $("#refreshAccountsBtn").addEventListener("click", loadAccounts);
-}
-
-// ------------------------------------------------------------------- emails
-async function loadEmails() {
-  const emails = await api("GET", "/api/emails");
-  const tbody = $("#emailsTable tbody");
-  if (!emails.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">No emails yet — create one above.</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = emails.map(e => `
-    <tr data-email-row="${e.id}">
-      <td>${escapeHtml(e.provider)}</td>
-      <td>${escapeHtml(e.address)}</td>
-      <td class="pw-cell" data-field="password">••••••••</td>
-      <td>${new Date(e.created_at * 1000).toLocaleString()}</td>
-      <td class="row-actions">
-        <button class="btn small" data-reveal="${e.id}">Show</button>
-        <button class="btn small" data-inbox="${e.id}">Check inbox</button>
-      </td>
-      <td class="row-actions">
-        <button class="btn small" data-register="${e.id}">Register on PornoLab</button>
-        <button class="btn small danger" data-delete="${e.id}">Delete</button>
-      </td>
-    </tr>
-  `).join("");
-
-  $$("#emailsTable [data-reveal]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.reveal;
-      const row = $(`tr[data-email-row="${id}"]`);
-      try {
-        const creds = await api("GET", `/api/emails/${id}/credentials`);
-        row.querySelector('[data-field="password"]').textContent = creds.password || "—";
-        btn.textContent = "Shown";
-        btn.disabled = true;
-      } catch (e) {
-        toast(e.message, "err");
-      }
-    });
-  });
-
-  $$("#emailsTable [data-inbox]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "Loading…";
-      try {
-        const [res, rec] = await Promise.all([
-          api("GET", `/api/emails/${btn.dataset.inbox}/inbox`),
-          api("GET", `/api/emails/${btn.dataset.inbox}/credentials`),
-        ]);
-        $("#emailsInboxAddress").textContent = rec.address || "";
-        const inboxTbody = $("#emailsInboxTable tbody");
-        inboxTbody.innerHTML = (res.messages || []).length
-          ? res.messages.map(m => `<tr><td>${escapeHtml(m.from || "")}</td><td>${escapeHtml(m.subject || "(no subject)")}</td></tr>`).join("")
-          : `<tr><td colspan="2" class="empty">Inbox empty</td></tr>`;
-        $("#emailsInboxCard").hidden = false;
-      } catch (e) {
-        toast(e.message, "err");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Check inbox";
-      }
-    });
-  });
-
-  $$("#emailsTable [data-register]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "Registering…";
-      try {
-        const res = await api("POST", `/api/emails/${btn.dataset.register}/register-pornolab`, {});
-        toast(res.activated
-          ? `✓ Registered and activated: ${res.username} (${res.email})`
-          : `✓ Registered: ${res.username} (${res.email}) — activation pending.`, "ok");
-        await loadEmails();
-        await loadAccountSwitcher();
-      } catch (e) {
-        toast(e.message, "err");
-        btn.disabled = false;
-        btn.textContent = "Register on PornoLab";
-      }
-    });
-  });
-
-  $$("#emailsTable [data-delete]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      if (!confirm("Remove this email from the list? This does not delete the remote account.")) return;
-      btn.disabled = true;
-      try {
-        await api("DELETE", `/api/emails/${btn.dataset.delete}`);
-        await loadEmails();
-      } catch (e) {
-        toast(e.message, "err");
-        btn.disabled = false;
-      }
-    });
-  });
-}
-
-function initEmails() {
-  $("#refreshEmailsBtn").addEventListener("click", loadEmails);
-  $("#emailsInboxCloseBtn").addEventListener("click", () => { $("#emailsInboxCard").hidden = true; });
-
-  const select = $("#emailsProviderSelect");
-  api("GET", "/api/emails/providers").then(res => {
-    select.innerHTML = (res.providers || [])
-      .filter(p => p !== "atomicmail")   // atomicmail has its own manual-captcha button below
-      .map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+  api("GET", "/api/settings").then(s => {
+    if (s.register_url) {
+      const link = $("#createAccountLink");
+      link.href = s.register_url;
+      link.hidden = false;
+    }
   }).catch(() => {});
-
-  $("#emailsNewBtn").addEventListener("click", async () => {
-    const btn = $("#emailsNewBtn");
-    const statusEl = $("#emailsStatus");
-    btn.disabled = true;
-    statusEl.hidden = false;
-    statusEl.textContent = `Creating a ${select.value} email…`;
-    try {
-      const res = await api("POST", "/api/emails/new", { provider: select.value });
-      statusEl.textContent = `✓ Created ${res.address}`;
-      await loadEmails();
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
 }
-
-// ----------------------------------------------------------- mail.ru factory
-function initEmailFactory() {
-  const btn      = $("#regEmailBtn");
-  const statusEl = $("#regEmailStatus");
-  const emailInput = $("#registerForm").elements["email"];
-  const passInput  = $("#registerForm").elements["password"];
-
-  if (!btn) return;
-
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    statusEl.hidden = false;
-    statusEl.textContent = "Creating email account (browser automation, may take ~30–90s)…";
-    try {
-      const res = await api("POST", "/api/email/create", {});
-      emailInput.value = res.email;
-      passInput.value  = res.password;
-      emailInput.dispatchEvent(new Event("input"));
-      statusEl.textContent = `✓ Created ${res.email}`;
-    } catch (e) {
-      statusEl.textContent = `Error: ${e.message}`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-}
-
-// --------------------------------------------------------------------- poll
-let stateSeq = 0;
 async function refreshState() {
   const seq = ++stateSeq;
   try {
@@ -1290,13 +815,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initTailscale();
   initEvents();
   initAccounts();
-  initEmails();
-  loadEmails();
   initHistory();
-  initRegister();
-  initEmailFactory();
-  initFullAuto();
-  initAtomicmail();
   await loadAccountSwitcher();
   initPoll();
 });
