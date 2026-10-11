@@ -28,7 +28,20 @@ services:
       # netns (confirmed live: published ports became unreachable from
       # outside the container until this was set, even though everything
       # worked from inside it).
-      TS_EXTRA_ARGS: "--netfilter-mode=off"
+      #
+      # --reset: once an exit node is selected (via the app's own `tailscale
+      # set --exit-node=...`), that choice is a persisted, non-default pref.
+      # On the NEXT boot, containerboot runs its own `tailscale up` with only
+      # the flags listed here -- not the exit node -- and the CLI refuses to
+      # proceed unless every non-default pref is restated, crashing the
+      # whole container on every single startup (confirmed live 2026-10-11,
+      # right after a host reboot: "Error: changing settings via 'tailscale
+      # up' requires mentioning all non-default flags" followed by
+      # SIGTERM-and-retry forever). --reset clears prior prefs before
+      # applying just these flags, so boot always succeeds -- the tradeoff
+      # is a selected exit node does not survive a container restart and
+      # must be reselected from the UI.
+      TS_EXTRA_ARGS: "--reset --netfilter-mode=off"
       # Without this, containerboot gives up waiting for interactive
 
       # login approval after its default boot timeout and kills tailscaled,
