@@ -403,7 +403,9 @@
       </div>
       <div id="atomicmailPrompt" class="muted small" hidden></div>
       <div id="atomicmailImageWrap" hidden style="margin-top:.5rem;line-height:0">
-        <img id="atomicmailImage" style="max-width:100%;cursor:crosshair;border:1px solid var(--border,#444)">
+        <img id="atomicmailImage" draggable="false"
+             style="max-width:100%;cursor:crosshair;border:1px solid var(--border,#444);
+                    touch-action:manipulation;user-select:none;-webkit-user-drag:none">
       </div>
       <div id="atomicmailStatus" class="muted small" hidden></div>
     </div>

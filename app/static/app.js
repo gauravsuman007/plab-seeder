@@ -841,8 +841,13 @@ function initAtomicmail() {
     cancelBtn.hidden = false;
   }
 
-  img.addEventListener("click", async (ev) => {
+  // Use pointerup rather than click -- on some mobile browsers (seen on
+  // Firefox/Android) a native image long-press/drag gesture can swallow the
+  // synthetic click event entirely, so no tap on the challenge ever lands.
+  img.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  img.addEventListener("pointerup", async (ev) => {
     if (!sessionId) return;
+    ev.preventDefault();
     const rect = img.getBoundingClientRect();
     const x = (ev.clientX - rect.left) / rect.width;
     const y = (ev.clientY - rect.top) / rect.height;
