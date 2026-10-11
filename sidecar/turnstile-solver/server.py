@@ -247,13 +247,22 @@ async def tuta_create() -> TutaCreateResponse:
                     "https://app.tuta.com/signup?websiteLang=en",
                     wait_until="load", timeout=30000,
                 )
-                await page.wait_for_timeout(4000)
-
-                # Plan picker: click the "Free" plan tile, then Continue.
+                # The signup SPA takes ~45-60s to finish booting (it compiles
+                # a WASM crypto module client-side) before the plan picker
+                # even exists in the DOM -- confirmed live 2026-10-11 by
+                # polling document.body.innerText every 10-15s: empty until
+                # ~20-30s, "Please wait..." until ~45-60s, then the real
+                # page. The old fixed 4s pause here meant .click()'s own 30s
+                # auto-wait (34s total) always expired first, failing every
+                # attempt with "Timeout 30000ms exceeded" on locator
+                # "text=Free". Wait for the real element instead of a fixed
+                # sleep; this timeout (not the ~60s typical case) is what a
+                # live account creation actually succeeded with under this
+                # host's memory pressure, so it's not just a guess.
                 free_box = page.locator("text=Free").first
-                await free_box.click()
+                await free_box.click(timeout=90000)
                 await page.wait_for_timeout(500)
-                await page.locator('button:has-text("Continue")').first.click()
+                await page.locator('button:has-text("Continue")').first.click(timeout=15000)
                 await page.wait_for_timeout(4000)
 
                 # Account-details step: first non-password/checkbox input is
