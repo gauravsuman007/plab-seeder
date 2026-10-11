@@ -28,6 +28,14 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
       TS_USERSPACE: "false"
+      # This node only ever consumes someone else's exit node; it never
+      # advertises itself as one or as a subnet router, so it doesn't need
+      # tailscaled's own nftables rules -- which otherwise conflict with
+      # Docker's own port publishing for every container sharing this
+      # netns (confirmed live: published ports became unreachable from
+      # outside the container until this was set, even though everything
+      # worked from inside it).
+      TS_EXTRA_ARGS: "--netfilter-mode=off"
     volumes:
       - tailscale-state:/var/lib/tailscale
       - tailscale-socket:/var/run/tailscale
