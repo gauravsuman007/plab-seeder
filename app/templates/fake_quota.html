@@ -66,6 +66,7 @@
             </div>
           </div>
           <dl class="kv" id="profileKv"></dl>
+          <p class="muted small" id="profileNewAccountNote" hidden>Stats are all zero — normal for a new account. They will appear after the tracker processes the first few announces (usually a few hours).</p>
         </div>
 
         <div class="card">
@@ -213,13 +214,8 @@ function render(s) {
       ['Today down', fmt(p.today?.down)],
       ['Today up', fmt(p.today?.up)],
     ]);
-    if (!p.downloaded && !p.credited_upload && !p.rating) {
-      const note = Object.assign(document.createElement('p'), {
-        className: 'muted small',
-        textContent: 'Stats are all zero — normal for a new account. They will appear after the tracker processes the first few announces (usually a few hours).',
-      });
-      $('profileKv').after(note);
-    }
+    const noStats = !p.downloaded && !p.credited_upload && !p.rating;
+    $('profileNewAccountNote').hidden = !noStats;
   }
 
   // announce card
