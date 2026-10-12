@@ -1,0 +1,114 @@
+# A fully standalone stack: its own tailscale + qBittorrent, with no
+# dependency on (or connection to) the vpngate-torrent project's network,
+# gateway, or qBittorrent instance. Unrelated to docker-compose.tailscale.yml,
+# which is a tailscale *overlay* for the vpngate-connected deployment (see
+# that file's own header) -- this one is a separate, independent deployment
+# of the whole app on its own network, meant to live in its own directory
+# (e.g. /home/hellonfire/Server/pornolab-seeder-tscale).
+#
+# Host ports default to 8020/8091/8882 specifically to avoid colliding with
+# the vpngate-torrent stack's 8010/8080/8081 when both run on the same host.
+#
+# Deploy with: docker compose -f docker-compose.tailscale-standalone.yml up -d
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: pornolab-seeder-tscale-ts
+    hostname: ${TS_HOSTNAME:-pornolab-seeder-tscale}
+    environment:
+      # Set TS_AUTHKEY in .env for an unattended join. Left empty, the
+      # container logs a one-time login URL on first start (`docker logs
+      # pornolab-seeder-tscale-ts`) -- open it yourself to authorize the
+      # device; nothing here needs a password.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      # Empty = a plain tailnet join (secure remote access to qBittorrent's
+      # WebUI over Tailscale, nothing else). qBittorrent's own torrent
+      # traffic still egresses via this host's normal connection. To route
+      # it through another device on your tailnet instead (e.g. a VPS with
+      # a cleaner IP), set TS_EXTRA_ARGS=--exit-node=<name-or-ip> -- but see
+      # docker-compose.tailscale.yml's own TS_EXTRA_ARGS comment first: an
+      # exit node is a non-default pref that crashes the container on every
+      # restart unless reset, the same issue that file already works around.
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    ports:
+      # qBittorrent shares this container's network stack (see below), so
+      # its ports are published here.
+      - "${QBIT_WEBUI_PORT:-8091}:8080"
+      - "${QBIT_TORRENT_PORT:-8882}:6881/tcp"
+      - "${QBIT_TORRENT_PORT:-8882}:6881/udp"
+    networks:
+      pornolab_tscale:
+        ipv4_address: 192.168.208.2
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: pornolab-seeder-tscale-qbit
+    # Shares the tailscale container's network namespace -- the same
+    # pattern the vpngate-torrent stack uses for its own gateway/qbit pair.
+    network_mode: service:tailscale
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: 6881
+    volumes:
+      - ./data/qbittorrent:/config
+      - ./downloads:/downloads
+    depends_on:
+      - tailscale
+    restart: unless-stopped
+
+  pornolab-seeder:
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
+    container_name: pornolab-seeder-tscale
+    environment:
+      DATA_DIR: /data
+      # qbittorrent is reached at the tailscale service's address, since it
+      # shares that container's network stack.
+      QBIT_URL: ${QBIT_URL:-http://tailscale:8080}
+      # No tunnel-supervisor control API in this standalone stack (that's a
+      # vpngate-torrent-specific thing) -- left unset so the dashboard's
+      # gateway panel just reports unavailable instead of pointing at
+      # something that doesn't exist here.
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      # Pinned to a static IP rather than the "pornolab-seeder" hostname:
+      # Docker's embedded DNS has been observed to silently stop resolving
+      # a container's own compose-network hostname to its peers (see
+      # docker-compose.yml's own SELF_URL comment for the 2026-10-12
+      # incident this sidesteps from the start).
+      SELF_URL: ${SELF_URL:-http://192.168.208.10:8000}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./data/seeder:/data
+    ports:
+      - "${SEEDER_PORT:-8020}:8000"
+    networks:
+      pornolab_tscale:
+        ipv4_address: 192.168.208.10
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+networks:
+  # A standalone bridge, unrelated to the vpngate-torrent project's network
+  # -- this stack doesn't join or depend on it.
+  pornolab_tscale:
+    name: pornolab-seeder-tscale_default
+    ipam:
+      config:
+        - subnet: 192.168.208.0/24
