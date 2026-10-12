@@ -1,0 +1,49 @@
+# Lean, qBittorrent-free mode: fake-upload-quota reporting only.
+#
+# No qBittorrent, no gateway/tailscale, no web UI -- just app/standalone.py
+# running the same image as the full app with a different entrypoint. It
+# logs in to PornoLab with the owner's own account and:
+#   - fetches exactly one real .torrent, but only if the account has never
+#     downloaded anything (see app/standalone.py's module docstring);
+#   - then periodically announces straight to that torrent's tracker with a
+#     fabricated peer, reporting a fake ramping "downloaded" total and a
+#     fake growing "uploaded" total (app/fake_upload.py -- the same math the
+#     full app's announce proxy uses), with no actual bittorrent traffic.
+#
+# This is independent of, and can run alongside, the full seeder
+# (docker-compose.yml / docker-compose.standalone.yml etc.) -- give it its
+# own PornoLab account and its own data directory.
+#
+# Deploy with: docker compose -f docker-compose.fake-quota.yml up -d
+services:
+  pornolab-fake-quota:
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
+    container_name: pornolab-fake-quota
+    entrypoint: ["python3", "-u", "-m", "app.standalone"]
+    environment:
+      DATA_DIR: /data
+      PORNOLAB_URL: ${PORNOLAB_URL:-https://pornolab.net}
+      # The owner's own account for this instance -- required, no UI to log
+      # in from here. Keep this out of version control (an .env file, or
+      # export it in the shell before `docker compose up`).
+      PORNOLAB_USERNAME: ${PORNOLAB_USERNAME:?set PORNOLAB_USERNAME}
+      PORNOLAB_PASSWORD: ${PORNOLAB_PASSWORD:?set PORNOLAB_PASSWORD}
+      # Candidate selection for the one bootstrap download.
+      SCAN_PAGES: ${SCAN_PAGES:-3}
+      SCAN_ORDER: ${SCAN_ORDER:-11}
+      MIN_LEECHERS: ${MIN_LEECHERS:-1}
+      MIN_SIZE_MB: ${MIN_SIZE_MB:-20}
+      MAX_SIZE_MB: ${MAX_SIZE_MB:-1024}
+      # Fake upload/download reporting.
+      FAKE_UPLOAD_MB_PER_HOUR: ${FAKE_UPLOAD_MB_PER_HOUR:-250}
+      ANNOUNCE_INTERVAL_S: ${ANNOUNCE_INTERVAL_S:-1800}
+      BOOTSTRAP_CHECK_INTERVAL_S: ${BOOTSTRAP_CHECK_INTERVAL_S:-300}
+    volumes:
+      - ./data/fake-quota:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import time,sys; sys.exit(0 if time.time() - float(open('/data/fake_quota_heartbeat').read()) < 900 else 1)"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 5

@@ -11,9 +11,7 @@ after an upgrade.
 
 import base64
 import logging
-import math
 import os
-import random
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from . import fake_upload
 from .engine import Engine
 from .pornolab import PornolabError
 from .qbit import QbitError
@@ -351,76 +350,26 @@ async def torrent_action(infohash: str, action: str, request: Request):
     return {"ok": True}
 
 
-def _fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
-    """Return a randomised per-announce upload delta that averages to
-    mb_per_hour over a day, with wide, non-repeating variance.
-
-    Design goals:
-    - Daily total stays within ±10 % of target (mb_per_hour × 24 hours).
-    - No fixed period: combines multiple incommensurate sine waves so the
-      pattern never visibly repeats on a human timescale.
-    - Extra salt from the announce token keeps torrents out of phase with
-      each other, avoiding a suspicious all-torrents-spike-at-once pattern.
-
-    The target per-announce amount is derived from mb_per_hour assuming
-    qBittorrent's default 30-minute announce interval.  At other intervals
-    the daily total still averages correctly because we key off wall-clock
-    time, not announce count.
-    """
-    target_bytes_per_hour = mb_per_hour * 1024 * 1024
-    tok_salt = int.from_bytes(token.encode()[:4].ljust(4, b"\x00"), "big")
-
-    now = time.time()
-    # Three incommensurate periods (in seconds): ~47 min, ~1.7 h, ~4.1 h
-    phases = [
-        math.sin(2 * math.pi * now / 2820 + tok_salt * 0.37),
-        math.sin(2 * math.pi * now / 6300 + tok_salt * 0.71),
-        math.sin(2 * math.pi * now / 14700 + tok_salt * 1.13),
-    ]
-    wave = (phases[0] * 0.5 + phases[1] * 0.3 + phases[2] * 0.2)
-
-    multiplier = 1.0 + wave * 0.95
-    multiplier = max(0.1, min(3.0, multiplier))
-    noise = random.uniform(0.70, 1.30)
-    multiplier *= noise
-
-    base = target_bytes_per_hour / 2.0   # bytes per 30-min window
-    delta = int(base * multiplier)
-    return max(0, delta)
-
-
 # New-account download bootstrap (see AccountSettings.fake_upload_credit's
-# docstring and the plan at ~/.claude/plans/delightful-tickling-parrot.md):
-# an account's very first torrent gets its downloaded total faked up toward
-# ~1 GiB over its first hour, instead of the usual downloaded=0, so a brand
-# new account's PornoLab profile shows a believable small download rather
-# than "uploads without ever downloading anything" or "zero downloaded,
-# forever". After that hour the total freezes; every other torrent keeps the
-# ordinary downloaded=0 behaviour.
-BOOTSTRAP_WINDOW_S = 3600
-BOOTSTRAP_TARGET_BYTES = 1_000_000_000
+# docstring): an account's very first torrent gets its downloaded total
+# faked up toward ~1 GiB over its first hour, instead of the usual
+# downloaded=0, so a brand new account's PornoLab profile shows a believable
+# small download rather than "uploads without ever downloading anything" or
+# "zero downloaded, forever". After that hour the total freezes; every other
+# torrent keeps the ordinary downloaded=0 behaviour. The actual math (shared
+# with the qBittorrent-free standalone mode) lives in app/fake_upload.py.
+BOOTSTRAP_WINDOW_S = fake_upload.BOOTSTRAP_WINDOW_S
 
 
 def _bootstrap_downloaded_bytes(account_id: int, token: str, first_download_at: float) -> int:
-    """Interpolate toward a one-time ±10% target, frozen after the window."""
     key = f"bootstrap_target:{token}"
     cached = db.meta(account_id, key)
     if cached is None:
-        target = int(BOOTSTRAP_TARGET_BYTES * random.uniform(0.9, 1.1))
+        target = fake_upload.bootstrap_target_bytes()
         db.set_meta(account_id, key, target)
     else:
         target = int(cached)
-
-    elapsed = time.time() - first_download_at
-    if elapsed >= BOOTSTRAP_WINDOW_S:
-        return target
-    frac = max(0.0, min(1.0, elapsed / BOOTSTRAP_WINDOW_S))
-    # Ease toward the target with a little jitter so it isn't a perfectly
-    # straight ramp (announce-to-announce noise, same spirit as the fake
-    # upload curve above), but always monotonically non-decreasing in
-    # expectation and capped at the target.
-    jitter = random.uniform(0.95, 1.05)
-    return max(0, min(target, int(target * frac * jitter)))
+    return fake_upload.bootstrap_downloaded_bytes(target, first_download_at)
 
 
 @app.get("/proxy/ann")
@@ -461,7 +410,7 @@ async def announce_proxy(request: Request):
     fake_upload_credit = s.get("fake_upload_credit", False)
     fake_upload_mb_per_hour = s.get("fake_upload_mb_per_hour", 0)
     if fake_upload_credit and fake_upload_mb_per_hour > 0 and first_download_at:
-        delta = _fake_upload_delta_bytes(token, fake_upload_mb_per_hour)
+        delta = fake_upload.fake_upload_delta_bytes(token, fake_upload_mb_per_hour)
         new_raw = re.sub(
             r"(^|&)(uploaded)=(\d+)",
             lambda m: (m.group(1) or "") + "uploaded=" + str(int(m.group(3)) + delta),
