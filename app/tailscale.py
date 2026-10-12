@@ -51,7 +51,6 @@ async def status() -> dict:
              "exit_node_name": None, "exit_nodes": []}
     if not available():
         return empty
-    await _capture_default_gateway()  # learn the LAN gateway before an exit node can hide it
     try:
         rc, out, err = await _run("status", "--json")
     except TailscaleError as e:
@@ -81,9 +80,6 @@ async def status() -> dict:
     }
 
 
-_LAN_GW: tuple[str, str] | None = None
-
-
 async def _run_ip(*args: str, timeout: float = 10) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         "ip", *args,
@@ -97,47 +93,29 @@ async def _run_ip(*args: str, timeout: float = 10) -> tuple[int, str, str]:
     return proc.returncode, out.decode(errors="replace"), err.decode(errors="replace")
 
 
-async def _capture_default_gateway() -> tuple[str, str] | None:
-    """Record the non-tailscale default gateway/interface (the docker
-    bridge) the first time it's seen, before any exit node has replaced it
-    -- so a later exit-node selection can pin the LAN route back through
-    it. Cached for the life of the process since this never changes."""
-    global _LAN_GW
-    if _LAN_GW is not None:
-        return _LAN_GW
-    rc, out, _ = await _run_ip("route", "show", "default")
-    for line in out.splitlines():
-        parts = line.split()
-        if "tailscale0" in parts:
-            continue  # an exit node is already active; nothing to learn
-        if "via" in parts and "dev" in parts:
-            gw = parts[parts.index("via") + 1]
-            dev = parts[parts.index("dev") + 1]
-            _LAN_GW = (gw, dev)
-            return _LAN_GW
-    return None
-
-
 async def _pin_lan_route() -> None:
-    """Selecting an exit node replaces the default route with one via
-    tailscale0 -- which also swallows return traffic for inbound WebUI
-    connections from the real LAN. `--exit-node-allow-lan-access` doesn't
-    cover this: it only exempts subnets this netns is *directly attached*
-    to (the docker bridge subnet), not the real LAN sitting beyond the
-    host's NAT, which this container has no specific route for at all once
-    the default route points at the exit node. Re-add an explicit route for
-    LAN_CIDR via the original (pre-tailscale) gateway -- Linux always
-    prefers the longer prefix match over the default route, so this holds
-    regardless of what the exit node does. No-ops if LAN_CIDR isn't set.
-    Confirmed live 2026-10-11: selecting an exit node on plab-register
-    killed WebUI access from the LAN until this was added."""
+    """Selecting an exit node does NOT touch the main route table (that was
+    a wrong first guess, fixed below) -- it works by adding an `ip rule`
+    that matches *every* packet ("from all lookup 52", priority 5270,
+    unconditional -- no fwmark needed) and sends it to tailscale's own
+    table 52 for a lookup, and that rule is evaluated before the main
+    table's rule (priority 32766). Table 52 has a `default dev tailscale0`
+    route and only `throw`s back out (falling through to the next ip rule,
+    eventually reaching main) for subnets tailscale auto-detected as
+    locally attached -- which is just this netns's own docker-bridge
+    subnet, never the real LAN sitting beyond the host's NAT. So any LAN
+    client's return traffic matches table 52's catch-all default and goes
+    out tailscale0 instead of back out eth0, with the main table never
+    even consulted (confirmed live 2026-10-11 via `ip route get
+    <lan-client-ip>`, which resolved via tailscale0 despite a correct,
+    more-specific route for it sitting unused in the main table).
+    The fix is the same trick tailscale uses for its own docker-bridge
+    exemption: add a `throw` route for LAN_CIDR *inside table 52 itself*,
+    so a lookup for that subnet misses in table 52 and falls through to
+    main, which has the real route. No-ops if LAN_CIDR isn't set."""
     if not LAN_CIDR:
         return
-    gw = await _capture_default_gateway()
-    if not gw:
-        return
-    gateway, dev = gw
-    await _run_ip("route", "replace", LAN_CIDR, "via", gateway, "dev", dev)
+    await _run_ip("route", "replace", "throw", LAN_CIDR, "table", "52")
 
 
 async def _drain(proc: asyncio.subprocess.Process) -> None:
