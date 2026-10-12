@@ -54,6 +54,7 @@ class Engine:
         self.scan_at: float | None = None
         self.scan_stats: dict = {}
         self.limit_hit_at: float | None = None
+        self.limit_hit_message: str = ""
 
     @property
     def s(self):
@@ -124,7 +125,17 @@ class Engine:
                             override=self.s.guard_override)
 
     def budget(self) -> dict:
-        """The seeder's share of PornoLab's daily .torrent quota."""
+        """The seeder's share of PornoLab's daily .torrent quota.
+
+        `left` is always plain `budget - used` so the numbers stay internally
+        consistent (a budget of 2 with 0 used reads as 2 left, never 0).
+        A site refusal -- the tracker itself turning us away, whether that's
+        its daily download cap or an unrelated gate like a too-low rating --
+        is a *separate* hard stop, reported via `refused_until`/`refused_reason`
+        rather than folded into `left`. Callers that gate on availability must
+        check both (see `add()` and `decide()`); only the UI cares about `left`
+        on its own.
+        """
         now = time.time()
         fetches = self.db.fetches_since(now - DAY)
         recent = [f for f in fetches if f["ok"]]      # a refused fetch downloaded nothing
@@ -132,14 +143,25 @@ class Engine:
         left = max(0, self.s.daily_torrent_budget - used)
         next_slot = recent[0]["at"] + DAY if recent and left == 0 else None
         refused_until = None
+        refused_reason = None
         # Read from the DB so a restart doesn't forget a refusal.
-        refusals = [f["at"] for f in fetches if not f["ok"]]
-        hit = max(refusals + ([self.limit_hit_at] if self.limit_hit_at else []), default=None)
-        if hit and now - hit < DAY:
-            refused_until = hit + DAY
-            left = 0
+        refusals = [(f["at"], f["message"]) for f in fetches if not f["ok"]]
+        if self.limit_hit_at:
+            refusals.append((self.limit_hit_at, self.limit_hit_message))
+        if refusals:
+            hit, message = max(refusals, key=lambda r: r[0])
+            if now - hit < DAY:
+                refused_until = hit + DAY
+                refused_reason = message or None
         return {"budget": self.s.daily_torrent_budget, "used": used, "left": left,
-                "next_slot": next_slot, "refused_until": refused_until}
+                "next_slot": next_slot, "refused_until": refused_until, "refused_reason": refused_reason}
+
+    def available_slots(self) -> int:
+        """`left`, but zero while a site refusal is still in its cooldown."""
+        b = self.budget()
+        if b["refused_until"] and time.time() < b["refused_until"]:
+            return 0
+        return b["left"]
 
     # ------------------------------------------------------------------ #
     # loops (each returns the seconds until its next run)
@@ -302,7 +324,7 @@ class Engine:
                     except PornolabError:
                         pass
             active = sum(1 for t in self.torrents if (t.get("progress") or 0) < 1)
-            slots = min(self.budget()["left"], max(0, self.s.max_active_downloads - active))
+            slots = min(self.available_slots(), max(0, self.s.max_active_downloads - active))
             if slots <= 0:
                 return
             g = self.guard()
@@ -365,7 +387,12 @@ class Engine:
         is_first_ever = not self.db.known_topics()
         if not self.profile:
             raise ValueError("no PornoLab profile yet: log in first")
-        if self.budget()["left"] <= 0:
+        b = self.budget()
+        if b["refused_until"] and time.time() < b["refused_until"]:
+            when = time.strftime("%H:%M", time.localtime(b["refused_until"]))
+            reason = f": {b['refused_reason']}" if b["refused_reason"] else ""
+            raise ValueError(f"PornoLab refused the last .torrent request{reason} -- try again after {when}")
+        if b["left"] <= 0:
             raise ValueError("today's .torrent budget is used up")
         g = self.guard()
         if not g.fits(release.size):
@@ -376,6 +403,7 @@ class Engine:
             data = await self.pl.download(topic_id)
         except LimitReached as e:
             self.limit_hit_at = time.time()
+            self.limit_hit_message = str(e)
             self.db.record_fetch(topic_id, False, str(e))
             self.db.event(f"PornoLab refused the .torrent for {topic_id}: {e}", "warning")
             raise

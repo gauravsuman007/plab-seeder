@@ -195,7 +195,10 @@ function renderProfile(s) {
     ["Left today", b.left === null ? "—" : fmtNum(b.left)],
     ["Next slot", b.next_slot ? fmtWhen(b.next_slot) : "—"],
   ];
-  if (b.refused_until) budgetRows.push(["Site refused until", fmtWhen(b.refused_until)]);
+  if (b.refused_until) {
+    budgetRows.push(["Site refused until", fmtWhen(b.refused_until)]);
+    if (b.refused_reason) budgetRows.push(["Refusal reason", b.refused_reason]);
+  }
   $("#budgetKv").innerHTML = budgetRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   const bpct = b.budget ? Math.min(100, (b.used / b.budget) * 100) : 0;
   const bfill = $("#budgetBarFill");
