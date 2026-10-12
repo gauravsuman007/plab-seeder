@@ -15,10 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Tailscale CLI only (no tailscaled here) -- this talks to the tailscale
 # sidecar's daemon over a shared socket volume, so this container never
 # needs NET_ADMIN or its own tailscaled.
-# TARGETARCH is set automatically by buildx/the multi-platform CI build
-# (amd64/arm64) -- the project's own hosts include both.
+# TARGETARCH (and TARGETVARIANT for the 32-bit arm case) are set
+# automatically by buildx/the multi-platform CI build (amd64/arm64/armv7).
 ARG TARGETARCH
-RUN TS_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo amd64) \
+ARG TARGETVARIANT
+RUN case "$TARGETARCH" in \
+        arm64) TS_ARCH=arm64 ;; \
+        arm) TS_ARCH=arm ;; \
+        *) TS_ARCH=amd64 ;; \
+    esac \
     && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_1.102.5_${TS_ARCH}.tgz" \
         -o /tmp/ts.tgz \
     && tar -xzf /tmp/ts.tgz -C /tmp \

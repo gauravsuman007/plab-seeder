@@ -6,8 +6,9 @@
 # of the whole app on its own network, meant to live in its own directory
 # (e.g. /home/hellonfire/Server/pornolab-seeder-tscale).
 #
-# Host ports default to 8020/8091/8882 specifically to avoid colliding with
-# the vpngate-torrent stack's 8010/8080/8081 when both run on the same host.
+# Host ports default to 8030/8091/8882 specifically to avoid colliding with
+# the vpngate-torrent stack's 8010/8080/8081 and the plab-register stack's
+# 8020 when all run on the same host.
 #
 # Deploy with: docker compose -f docker-compose.tailscale-standalone.yml up -d
 services:
@@ -23,15 +24,23 @@ services:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "false"
-      # Empty = a plain tailnet join (secure remote access to qBittorrent's
-      # WebUI over Tailscale, nothing else). qBittorrent's own torrent
-      # traffic still egresses via this host's normal connection. To route
-      # it through another device on your tailnet instead (e.g. a VPS with
-      # a cleaner IP), set TS_EXTRA_ARGS=--exit-node=<name-or-ip> -- but see
-      # docker-compose.tailscale.yml's own TS_EXTRA_ARGS comment first: an
-      # exit node is a non-default pref that crashes the container on every
-      # restart unless reset, the same issue that file already works around.
-      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+      # --netfilter-mode=off: tailscaled's own nftables rules otherwise
+      # conflict with Docker's port publishing for every container sharing
+      # this netns -- confirmed live (same issue, same fix, as
+      # docker-compose.tailscale.yml's identically-named comment): qbit's
+      # WebUI port was reachable from inside the container but reset the
+      # connection from outside until this was set. This node also never
+      # advertises itself as an exit node or subnet router, so it doesn't
+      # need those nftables rules for anything.
+      #
+      # To additionally route qBittorrent's own torrent traffic through
+      # another device on your tailnet (e.g. a VPS with a cleaner IP), add
+      # --exit-node=<name-or-ip> here too -- but see
+      # docker-compose.tailscale.yml's own TS_EXTRA_ARGS comment first: a
+      # selected exit node is a non-default pref that crashes the container
+      # on every restart unless --reset is also added, the same issue that
+      # file already works around.
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---netfilter-mode=off}
     volumes:
       - ./data/tailscale:/var/lib/tailscale
       - /dev/net/tun:/dev/net/tun
@@ -92,7 +101,7 @@ services:
     volumes:
       - ./data/seeder:/data
     ports:
-      - "${SEEDER_PORT:-8020}:8000"
+      - "${SEEDER_PORT:-8030}:8000"
     networks:
       pornolab_tscale:
         ipv4_address: 192.168.208.10
