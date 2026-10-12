@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fake-quota</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <h1>fake-quota</h1>
+  </div>
+  <div class="pills" id="statusPills"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="dashboard">Dashboard</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="events">Events</button>
+</nav>
+
+<main>
+
+  <!-- ============================ DASHBOARD ============================ -->
+  <section class="panel active" id="panel-dashboard">
+
+    <div class="card" id="loginCard" hidden>
+      <h2>Log in to PornoLab</h2>
+      <p class="muted">Your own account. Credentials are stored locally in this app's settings store.</p>
+      <form id="loginForm" class="form-grid">
+        <label>Username
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>Password
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="remember" checked>
+          <span>Remember password (so the app can stay logged in across restarts)</span>
+        </label>
+        <div class="captcha-block" id="captchaBlock" hidden>
+          <img id="captchaImg" alt="captcha">
+          <label>Captcha code
+            <input type="text" name="captcha" autocomplete="off">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Log in</button>
+          <span class="form-msg" id="loginMsg"></span>
+        </div>
+      </form>
+    </div>
+
+    <div id="profileArea" hidden>
+      <div class="grid-2">
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Profile</h2>
+            <div class="card-head-actions">
+              <span class="muted small" id="profileAt">—</span>
+              <button class="btn small" id="refreshProfileBtn">Refresh</button>
+              <button class="btn small danger" id="logoutBtn">Log out</button>
+            </div>
+          </div>
+          <dl class="kv" id="profileKv"></dl>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Announce status</h2>
+            <span class="muted small" id="announceAt">—</span>
+          </div>
+          <dl class="kv" id="announceKv"></dl>
+          <p class="muted small" id="bootstrapNote"></p>
+        </div>
+
+      </div>
+
+      <div class="card">
+        <h2>Fake upload credit</h2>
+        <p class="muted small">Inflates the <code>uploaded</code> counter reported to the tracker
+          on every announce, even without any real bittorrent traffic. Each announce uses a
+          randomised delta so the pattern looks like real bursty traffic; the daily total averages
+          within ±10&nbsp;% of the hourly rate set below.
+          <strong>Detection risk — owner's call.</strong></p>
+        <div class="form-grid">
+          <label class="checkbox-row">
+            <input type="checkbox" id="fakeUploadToggle">
+            <span>Enable fake upload credit <strong>(ban risk — owner's call)</strong></span>
+          </label>
+          <label>Hourly rate (MB/hr)
+            <input type="number" id="fakeUploadRate" min="1" step="1" value="250" style="width:7rem">
+          </label>
+          <div class="form-actions" style="grid-column:1/-1">
+            <button type="button" class="btn small" id="fakeUploadSaveBtn">Save</button>
+            <span class="form-msg" id="fakeUploadMsg"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ============================ SETTINGS ============================ -->
+  <section class="panel" id="panel-settings">
+    <div class="card">
+      <h2>PornoLab site</h2>
+      <div class="form-grid">
+        <label>Site URL <input type="text" id="pornolabUrl"></label>
+        <label>Announce interval (seconds)
+          <input type="number" id="announceInterval" value="1800" min="60" style="width:7rem">
+        </label>
+      </div>
+      <p class="muted small" style="margin-top:8px">Site URL and announce interval are read from
+        environment variables at startup (<code>PORNOLAB_URL</code>, <code>ANNOUNCE_INTERVAL_S</code>).
+        The URL shown here is from global settings and can be overridden; restart to apply the
+        interval change.</p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="saveGlobalBtn">Save site URL</button>
+        <span class="form-msg" id="globalMsg"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ EVENTS ============================ -->
+  <section class="panel" id="panel-events">
+    <div class="card">
+      <div class="card-head">
+        <h2>Events</h2>
+        <button class="btn small" id="refreshEventsBtn">Refresh</button>
+      </div>
+      <ul class="events" id="eventsList"></ul>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+// ---- tiny helpers -----------------------------------------------------------
+const $ = id => document.getElementById(id);
+const fmt = n => n == null ? '—' : n >= 1e9 ? (n/1e9).toFixed(2)+' GB'
+    : n >= 1e6 ? (n/1e6).toFixed(1)+' MB' : n >= 1e3 ? (n/1e3).toFixed(0)+' KB' : n+' B';
+const fmtTime = ts => ts ? new Date(ts*1000).toLocaleTimeString() : '—';
+const fmtDateTime = ts => ts ? new Date(ts*1000).toLocaleString() : '—';
+function showToast(msg, cls='') {
+  const t = $('toast'); t.textContent = msg; t.className = 'toast'+(cls?' '+cls:'');
+  t.hidden = false; clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.hidden = true; }, 3000);
+}
+
+// ---- tabs -------------------------------------------------------------------
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  tab.classList.add('active');
+  $('panel-' + tab.dataset.tab).classList.add('active');
+});
+
+// ---- state poll -------------------------------------------------------------
+let _state = {};
+async function poll() {
+  try {
+    const r = await fetch('/api/state');
+    _state = await r.json();
+    render(_state);
+  } catch(e) { console.warn('poll failed', e); }
+  setTimeout(poll, 8000);
+}
+
+function setKv(elId, pairs) {
+  const el = $(elId);
+  el.innerHTML = pairs.map(([k,v]) =>
+    `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+function render(s) {
+  // status pills
+  const pills = [];
+  if (s.logged_in) pills.push(['PornoLab', 'ok']);
+  else pills.push(['Not logged in', 'bad']);
+  if (s.bootstrap?.done) pills.push(['Announcing', 'ok']);
+  else if (s.bootstrap?.skipped) pills.push(['No bootstrap needed', 'ok']);
+  else pills.push(['Bootstrapping', '']);
+  $('statusPills').innerHTML = pills.map(([label,cls]) =>
+    `<span class="pill ${cls}"><span class="dot"></span>${label}</span>`).join('');
+
+  // login / profile visibility
+  const loggedIn = s.logged_in;
+  $('loginCard').hidden = loggedIn;
+  $('profileArea').hidden = !loggedIn;
+
+  if (!loggedIn) {
+    $('captchaBlock').hidden = !s.pending_captcha;
+    return;
+  }
+
+  // profile card
+  const p = s.profile;
+  if (p) {
+    $('profileAt').textContent = 'at ' + fmtTime(p.at);
+    setKv('profileKv', [
+      ['Username', p.username || '—'],
+      ['Rating', p.rating != null ? p.rating.toFixed(2) : '—'],
+      ['Downloaded', fmt(p.downloaded)],
+      ['Credited upload', fmt(p.credited_upload)],
+      ['Today down', fmt(p.today?.down)],
+      ['Today up', fmt(p.today?.up)],
+    ]);
+  }
+
+  // announce card
+  const b = s.bootstrap;
+  $('announceAt').textContent = b.announced_at ? 'last ' + fmtTime(parseFloat(b.announced_at)) : 'never';
+  if (b.done) {
+    setKv('announceKv', [
+      ['Topic', b.topic_id || '—'],
+      ['Infohash', b.infohash ? b.infohash.slice(0,12)+'…' : '—'],
+      ['First download', fmtDateTime(b.first_download_at)],
+      ['Uploaded (fake)', fmt(b.uploaded_total)],
+      ['Next announce', s.loop?.phase === 'waiting' ? 'soon' : s.loop?.phase],
+    ]);
+    $('bootstrapNote').textContent = '';
+  } else if (b.skipped) {
+    setKv('announceKv', []);
+    $('bootstrapNote').textContent = 'Bootstrap skipped: ' + (b.skip_reason || 'account already has download history') + '. No announces will be sent.';
+  } else {
+    setKv('announceKv', []);
+    $('bootstrapNote').textContent = 'Waiting for bootstrap download… (phase: ' + (s.loop?.phase || '—') + ')';
+  }
+
+  // fake upload toggles
+  $('fakeUploadToggle').checked = !!s.fake_upload_credit;
+  if (document.activeElement !== $('fakeUploadRate'))
+    $('fakeUploadRate').value = s.fake_upload_mb_per_hour || 250;
+}
+
+// ---- login form -------------------------------------------------------------
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const msg = $('loginMsg');
+  msg.textContent = 'Logging in…'; msg.className = 'form-msg';
+  const body = {
+    username: fd.get('username'), password: fd.get('password'),
+    remember: fd.get('remember') === 'on', captcha: fd.get('captcha') || null,
+  };
+  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json();
+  if (j.ok) {
+    msg.textContent = ''; e.target.reset(); poll();
+  } else if (j.captcha) {
+    $('captchaImg').src = j.captcha;
+    $('captchaBlock').hidden = false;
+    msg.textContent = 'Enter the captcha code above'; msg.className = 'form-msg';
+  } else {
+    msg.textContent = j.error || 'Login failed'; msg.className = 'form-msg err';
+  }
+});
+
+$('logoutBtn').addEventListener('click', async () => {
+  await fetch('/api/logout', {method:'POST'});
+  poll();
+});
+
+$('refreshProfileBtn').addEventListener('click', async () => {
+  const r = await fetch('/api/refresh_profile', {method:'POST'});
+  const j = await r.json();
+  if (!j.ok) showToast(j.error || 'Refresh failed', 'err');
+  else poll();
+});
+
+// ---- fake upload settings ---------------------------------------------------
+$('fakeUploadSaveBtn').addEventListener('click', async () => {
+  const msg = $('fakeUploadMsg');
+  const body = {
+    fake_upload_credit: $('fakeUploadToggle').checked,
+    fake_upload_mb_per_hour: parseInt($('fakeUploadRate').value) || 250,
+  };
+  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json();
+  if (j.ok) { msg.textContent = 'Saved'; msg.className = 'form-msg ok'; setTimeout(() => msg.textContent='', 2000); }
+  else { msg.textContent = j.error || 'Failed'; msg.className = 'form-msg err'; }
+});
+
+// ---- global settings --------------------------------------------------------
+async function loadGlobalSettings() {
+  const r = await fetch('/api/state');
+  // pornolab_url lives on the PL client; read it from environment instead.
+  // Just populate from the API state for now -- re-use the global settings endpoint if needed.
+}
+
+$('saveGlobalBtn').addEventListener('click', async () => {
+  const msg = $('globalMsg');
+  const url = $('pornolabUrl').value.trim();
+  if (!url) return;
+  // global settings endpoint on the full app; re-use it here via AccountSettings
+  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({})});
+  // pornolab_url is a GlobalSettings field; we can't set it from account settings.
+  // Show a hint instead.
+  msg.textContent = 'Set PORNOLAB_URL env var to change the site URL'; msg.className = 'form-msg';
+});
+
+// ---- events -----------------------------------------------------------------
+async function loadEvents() {
+  const r = await fetch('/api/events');
+  const evs = await r.json();
+  const ul = $('eventsList');
+  ul.innerHTML = evs.map(e => `
+    <li class="${e.level||''}">
+      <span class="lvl"></span>
+      <time>${fmtDateTime(e.at)}</time>
+      <span>${e.message}</span>
+    </li>`).join('') || '<li class="empty">No events yet.</li>';
+}
+$('refreshEventsBtn').addEventListener('click', loadEvents);
+document.getElementById('tabs').addEventListener('click', e => {
+  if (e.target.dataset.tab === 'events') loadEvents();
+});
+
+// ---- boot -------------------------------------------------------------------
+poll();
+</script>
+</body>
+</html>
