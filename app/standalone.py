@@ -62,6 +62,10 @@ ANNOUNCE_INTERVAL_S = int(os.environ.get("ANNOUNCE_INTERVAL_S", str(30 * 60)))
 BOOTSTRAP_CHECK_INTERVAL_S = int(os.environ.get("BOOTSTRAP_CHECK_INTERVAL_S", "300"))
 
 UA = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+# qBittorrent 4.6.0 user-agent and peer-id prefix used for tracker announces.
+# The tracker sees a normal client; Firefox UA is still used for site HTTP.
+ANNOUNCE_UA = "qBittorrent/4.6.0"
+PEER_ID_PREFIX = b"-qB4600-"    # 8 bytes; 12 random URL-safe bytes follow
 
 global_store = GlobalSettingsStore()
 db = DB()
@@ -154,7 +158,13 @@ async def _bootstrap() -> None:
         _db.event(f"Bootstrap .torrent unreadable: {e}", "error")
         return
 
-    peer_id_hex = secrets.token_hex(10)
+    # peer_id: qBittorrent format (-qB4600- + 12 random URL-safe ASCII chars).
+    # Stored as hex so it round-trips cleanly through SQLite.
+    peer_id_bytes = PEER_ID_PREFIX + secrets.token_bytes(12)
+    peer_id_hex = peer_id_bytes.hex()
+    # key: a random 32-bit value qBittorrent includes on every announce so
+    # the tracker can correlate re-announces from the same client instance.
+    announce_key = secrets.token_hex(4)
     port = random.randint(6881, 6999)
     bootstrap_target = fake_upload.bootstrap_target_bytes()
     now = time.time()
@@ -163,6 +173,7 @@ async def _bootstrap() -> None:
     _db.set_meta("fq:infohash", meta["infohash"])
     _db.set_meta("fq:announce_url", announce_url)
     _db.set_meta("fq:peer_id", peer_id_hex)
+    _db.set_meta("fq:announce_key", announce_key)
     _db.set_meta("fq:port", port)
     _db.set_meta("fq:first_download_at", now)
     _db.set_meta("fq:bootstrap_target", bootstrap_target)
@@ -183,6 +194,7 @@ async def _announce_once() -> None:
     infohash = _db.meta("fq:infohash")
     announce_url = _db.meta("fq:announce_url")
     peer_id_hex = _db.meta("fq:peer_id")
+    announce_key = _db.meta("fq:announce_key")
     first_download_at = _db.meta("fq:first_download_at")
     bootstrap_target = _db.meta("fq:bootstrap_target")
     port = _db.meta("fq:port")
@@ -190,6 +202,16 @@ async def _announce_once() -> None:
 
     if not all([infohash, announce_url, peer_id_hex, first_download_at, bootstrap_target]):
         return
+
+    # Migrate old 10-byte random peer_id to qBittorrent format (20 bytes).
+    if len(peer_id_hex) != 40:
+        peer_id_bytes_new = PEER_ID_PREFIX + secrets.token_bytes(12)
+        peer_id_hex = peer_id_bytes_new.hex()
+        _db.set_meta("fq:peer_id", peer_id_hex)
+        _db.set_meta("fq:announced_at", "")   # force event=started with the new id
+    if not announce_key:
+        announce_key = secrets.token_hex(4)
+        _db.set_meta("fq:announce_key", announce_key)
 
     first_at = float(first_download_at)
     target = int(bootstrap_target)
@@ -207,21 +229,28 @@ async def _announce_once() -> None:
         f"info_hash={quote(info_hash_bytes, safe='')}"
         f"&peer_id={quote(peer_id_bytes, safe='')}"
         f"&port={port}&uploaded={uploaded_total}&downloaded={downloaded}"
-        f"&left=0&compact=1&numwant=0"
+        f"&left=0&compact=1&numwant=200"
     )
+    if announce_key:
+        qs += f"&key={announce_key}"
     if is_first:
         qs += "&event=started"
     sep = "&" if "?" in announce_url else "?"
     url = announce_url + sep + qs
 
     try:
-        async with httpx.AsyncClient(headers={"User-Agent": UA}, timeout=30) as client:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": ANNOUNCE_UA, "Accept-Encoding": "gzip"},
+            timeout=30,
+        ) as client:
             r = await client.get(url)
         log.info("announced: downloaded=%s uploaded_total=%s -> HTTP %s",
                  downloaded, uploaded_total, r.status_code)
         _db.set_meta("fq:announced_at", time.time())
         loop_status.update(last_announce_at=time.time(),
                            uploaded_total=uploaded_total, downloaded_total=downloaded)
+        if r.status_code != 200:
+            _db.event(f"Announce HTTP {r.status_code}", "warning")
     except httpx.HTTPError as e:
         log.warning("announce failed: %s", e)
         _db.event(f"Announce failed: {e}", "warning")
