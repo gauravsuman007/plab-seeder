@@ -10,6 +10,7 @@ let lastState = null;
 let loginCreds = null;     // {username, password, remember} kept only to resubmit after a captcha
 let currentAccountId = parseInt(localStorage.getItem("accountId") || "1", 10);
 let accountsCache = [];
+let stateSeq = 0;   // guards refreshState() against a stale response landing after a newer one
 
 // -------------------------------------------------------------------- utils
 const $ = (sel, root = document) => root.querySelector(sel);
