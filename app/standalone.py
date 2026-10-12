@@ -80,7 +80,9 @@ _cookies_path = _DATA_DIR / f"pornolab_cookies_{_account_id}.json"
 _store_handle = AccountSettingsHandle(global_store, account_store, _account_id)
 _db = AccountDB(db, _account_id)
 
-pl = Pornolab(_store_handle.settings.pornolab_url, _cookies_path)
+# Pornolab client is created lazily in lifespan so asyncio.Lock() is
+# constructed inside the running event loop, not at module import time.
+pl: Pornolab | None = None
 logged_in = False
 profile = None
 profile_at: float | None = None
@@ -110,7 +112,7 @@ def _extract_announce(data: bytes) -> str:
 async def _bootstrap() -> None:
     """Fetch one .torrent for a brand-new account, record the announce URL."""
     global loop_status
-    if not logged_in:
+    if not logged_in or pl is None:
         return
 
     try:
@@ -260,8 +262,22 @@ async def _background_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global pl
+    pl = Pornolab(_store_handle.settings.pornolab_url, _cookies_path)
+    # Restore logged_in state from saved session cookie if present.
+    if _cookies_path.exists():
+        global logged_in, profile, profile_at
+        try:
+            p = await pl.profile()
+            logged_in = True
+            profile = p
+            profile_at = time.time()
+            _db.event("Session restored from saved cookies")
+        except Exception:  # noqa: BLE001
+            pass
     asyncio.create_task(_background_loop())
     yield
+    await pl.close()
 
 
 app = FastAPI(title="pornolab-fake-quota", lifespan=lifespan)
@@ -311,7 +327,7 @@ async def state():
     return {
         "now": time.time(),
         "logged_in": logged_in,
-        "pending_captcha": pl.pending_captcha is not None,
+        "pending_captcha": pl.pending_captcha is not None if pl else False,
         "loop": loop_status,
         "fake_upload_credit": s.fake_upload_credit,
         "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour,
@@ -337,6 +353,8 @@ async def state():
 @app.post("/api/login")
 async def login(request: Request):
     global logged_in, profile, profile_at
+    if pl is None:
+        return JSONResponse({"ok": False, "error": "app not ready yet"})
     b = await _body(request)
     username = b.get("username", "")
     password = b.get("password", "")
@@ -367,7 +385,8 @@ async def login(request: Request):
 @app.post("/api/logout")
 async def logout():
     global logged_in, profile, profile_at
-    pl.clear_session()
+    if pl:
+        pl.clear_session()
     logged_in = False
     profile = None
     profile_at = None
@@ -379,6 +398,8 @@ async def logout():
 @app.post("/api/refresh_profile")
 async def refresh_profile():
     global logged_in, profile, profile_at
+    if pl is None:
+        return JSONResponse({"ok": False, "error": "app not ready yet"})
     try:
         profile = await pl.profile()
         profile_at = time.time()
