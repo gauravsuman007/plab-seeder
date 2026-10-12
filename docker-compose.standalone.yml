@@ -1,0 +1,76 @@
+# A fully standalone stack with plain qBittorrent -- no tailscale, no
+# connection to the vpngate-torrent project. For when you just want the
+# seeder app with its own qBittorrent on this host's normal network, no VPN
+# layer at all. See docker-compose.tailscale-standalone.yml for the same
+# idea with a tailscale sidecar (secure remote WebUI access, optional
+# exit-node egress) instead of this plain networking.
+#
+# Host ports default to 8040/8092/8883 to avoid colliding with the
+# vpngate-torrent stack's 8010/8080/8081, the plab-register stack's 8020,
+# and the tailscale-standalone stack's 8030/8091/8882.
+#
+# Deploy with: docker compose -f docker-compose.standalone.yml up -d
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: pornolab-seeder-standalone-qbit
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: 6881
+    volumes:
+      - ./data/qbittorrent:/config
+      - ./downloads:/downloads
+    ports:
+      - "${QBIT_WEBUI_PORT:-8092}:8080"
+      - "${QBIT_TORRENT_PORT:-8883}:6881/tcp"
+      - "${QBIT_TORRENT_PORT:-8883}:6881/udp"
+    networks:
+      pornolab_standalone:
+        ipv4_address: 192.168.209.2
+    restart: unless-stopped
+
+  pornolab-seeder:
+    image: ghcr.io/gauravsuman007/plab-seeder:latest
+    container_name: pornolab-seeder-standalone
+    environment:
+      DATA_DIR: /data
+      QBIT_URL: ${QBIT_URL:-http://qbittorrent:8080}
+      # No tunnel-supervisor control API in this stack (that's a
+      # vpngate-torrent-specific thing) -- left unset so the dashboard's
+      # gateway panel just reports unavailable instead of pointing at
+      # something that doesn't exist here.
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      # Pinned to a static IP rather than the "pornolab-seeder" hostname:
+      # Docker's embedded DNS has been observed to silently stop resolving
+      # a container's own compose-network hostname to its peers (see
+      # docker-compose.yml's own SELF_URL comment for the 2026-10-12
+      # incident this sidesteps from the start).
+      SELF_URL: ${SELF_URL:-http://192.168.209.10:8000}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./data/seeder:/data
+    ports:
+      - "${SEEDER_PORT:-8040}:8000"
+    networks:
+      pornolab_standalone:
+        ipv4_address: 192.168.209.10
+    depends_on:
+      - qbittorrent
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+networks:
+  pornolab_standalone:
+    name: pornolab-seeder-standalone_default
+    ipam:
+      config:
+        - subnet: 192.168.209.0/24
