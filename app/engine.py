@@ -150,11 +150,28 @@ class Engine:
             refusals.append((self.limit_hit_at, self.limit_hit_message))
         if refusals:
             hit, message = max(refusals, key=lambda r: r[0])
-            if now - hit < DAY:
+            if now - hit < DAY and not self._rating_recovered_since(hit, message):
                 refused_until = hit + DAY
                 refused_reason = message or None
         return {"budget": self.s.daily_torrent_budget, "used": used, "left": left,
                 "next_slot": next_slot, "refused_until": refused_until, "refused_reason": refused_reason}
+
+    def _rating_recovered_since(self, hit: float, message: str) -> bool:
+        """Unlike the site's daily .torrent cap, a rating-gate refusal
+        ("Рейтинг ... не позволяет вам скачивать") isn't time-based: it lifts
+        the moment the rating is back above 0.3, which can happen well inside
+        the blanket 24h cooldown (the rating recomputes once a day, but a prior
+        session's seeding can push it over the line before that cooldown ends).
+        Trust the live profile -- polled independently of this refusal -- over
+        the clock: if it was refreshed after the refusal and the resulting
+        tier allows downloads again, the gate has already lifted.
+        """
+        if "рейтинг" not in (message or "").lower():
+            return False          # some other refusal (e.g. a real daily cap): keep the full cooldown
+        if not self.profile or not self.profile_at or self.profile_at <= hit:
+            return False          # no fresher profile read to trust yet
+        t = limits.tier(self.profile)
+        return t.daily_torrents is None or t.daily_torrents > 0
 
     def available_slots(self) -> int:
         """`left`, but zero while a site refusal is still in its cooldown."""
