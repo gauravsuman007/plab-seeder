@@ -97,6 +97,13 @@ class AccountSettings:
     fake_upload_credit: bool = False
     fake_upload_mb_per_hour: int = 250
 
+    # Fake download credit (off by default — ban risk; owner's call).
+    # Same variance model as fake_upload_credit but accumulates the downloaded
+    # counter. Default ≈ 1 GiB/day (43 MB/hr × 24). Added on top of the
+    # one-time bootstrap ramp so the total keeps growing organically.
+    fake_download_credit: bool = False
+    fake_download_mb_per_hour: int = 43
+
 
 # A merged view Engine actually reads: every field either store contributes.
 # Field-identical in spirit to the old single Settings dataclass.

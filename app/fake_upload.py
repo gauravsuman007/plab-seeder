@@ -59,6 +59,13 @@ def fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
     return max(0, delta)
 
 
+def fake_download_delta_bytes(token: str, mb_per_hour: int) -> int:
+    """Return a randomised per-announce download delta, same variance model as
+    fake_upload_delta_bytes but phase-shifted so upload and download deltas
+    don't move in lockstep."""
+    return fake_upload_delta_bytes(token + "_dl", mb_per_hour)
+
+
 def bootstrap_downloaded_bytes(target: int, first_download_at: float) -> int:
     """Interpolate toward a one-time target, frozen after the window.
 

@@ -199,6 +199,7 @@ async def _announce_once() -> None:
     bootstrap_target = _db.meta("fq:bootstrap_target")
     port = _db.meta("fq:port")
     uploaded_total = int(_db.meta("fq:uploaded_total") or 0)
+    downloaded_extra = int(_db.meta("fq:downloaded_extra") or 0)
 
     if not all([infohash, announce_url, peer_id_hex, first_download_at, bootstrap_target]):
         return
@@ -217,10 +218,14 @@ async def _announce_once() -> None:
     target = int(bootstrap_target)
     s = _store_handle.settings
 
-    downloaded = fake_upload.bootstrap_downloaded_bytes(target, first_at)
+    bootstrap_dl = fake_upload.bootstrap_downloaded_bytes(target, first_at)
     if s.fake_upload_credit and s.fake_upload_mb_per_hour > 0:
         uploaded_total += fake_upload.fake_upload_delta_bytes(infohash, s.fake_upload_mb_per_hour)
+    if s.fake_download_credit and s.fake_download_mb_per_hour > 0:
+        downloaded_extra += fake_upload.fake_download_delta_bytes(infohash, s.fake_download_mb_per_hour)
     _db.set_meta("fq:uploaded_total", uploaded_total)
+    _db.set_meta("fq:downloaded_extra", downloaded_extra)
+    downloaded = bootstrap_dl + downloaded_extra
 
     info_hash_bytes = bytes.fromhex(infohash)
     peer_id_bytes = bytes.fromhex(peer_id_hex)
@@ -244,11 +249,11 @@ async def _announce_once() -> None:
             timeout=30,
         ) as client:
             r = await client.get(url)
-        log.info("announced: downloaded=%s uploaded_total=%s -> HTTP %s",
-                 downloaded, uploaded_total, r.status_code)
+        log.info("announced: downloaded=%s (bootstrap=%s extra=%s) uploaded=%s -> HTTP %s",
+                 downloaded, bootstrap_dl, downloaded_extra, uploaded_total, r.status_code)
         _db.set_meta("fq:announced_at", time.time())
-        loop_status.update(last_announce_at=time.time(),
-                           uploaded_total=uploaded_total, downloaded_total=downloaded)
+        loop_status.update(last_announce_at=time.time(), uploaded_total=uploaded_total,
+                           downloaded_total=downloaded, downloaded_extra=downloaded_extra)
         if r.status_code != 200:
             _db.event(f"Announce HTTP {r.status_code}", "warning")
     except httpx.HTTPError as e:
@@ -276,6 +281,7 @@ async def _background_loop() -> None:
                 loop_status["bootstrap_done"] = True
                 # Restore persisted totals in case of restart
                 loop_status["uploaded_total"] = int(_db.meta("fq:uploaded_total") or 0)
+                loop_status["downloaded_extra"] = int(_db.meta("fq:downloaded_extra") or 0)
                 await _announce_once()
 
         except Exception as e:  # noqa: BLE001
@@ -360,6 +366,8 @@ async def state():
         "loop": loop_status,
         "fake_upload_credit": s.fake_upload_credit,
         "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour,
+        "fake_download_credit": s.fake_download_credit,
+        "fake_download_mb_per_hour": s.fake_download_mb_per_hour,
         "bootstrap": {
             "done": bool(_db.meta("fq:infohash")),
             "skipped": bool(_db.meta("fq:skip") or loop_status.get("bootstrap_skipped")),
@@ -368,6 +376,8 @@ async def state():
             "topic_id": _db.meta("fq:topic_id"),
             "first_download_at": account_row["first_download_at"] if account_row else None,
             "uploaded_total": int(_db.meta("fq:uploaded_total") or 0),
+            "downloaded_total": loop_status.get("downloaded_total", 0),
+            "downloaded_extra": int(_db.meta("fq:downloaded_extra") or 0),
             "announced_at": _db.meta("fq:announced_at") or None,
         },
         "profile": None if not p else {
@@ -450,7 +460,9 @@ async def save_settings(request: Request):
     _db.event("Settings saved")
     s = _store_handle.settings
     return {"ok": True, "fake_upload_credit": s.fake_upload_credit,
-            "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour}
+            "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour,
+            "fake_download_credit": s.fake_download_credit,
+            "fake_download_mb_per_hour": s.fake_download_mb_per_hour}
 
 
 @app.get("/api/events")

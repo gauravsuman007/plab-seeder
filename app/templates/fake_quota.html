@@ -80,26 +80,49 @@
 
       </div>
 
-      <div class="card">
-        <h2>Fake upload credit</h2>
-        <p class="muted small">Inflates the <code>uploaded</code> counter reported to the tracker
-          on every announce, even without any real bittorrent traffic. Each announce uses a
-          randomised delta so the pattern looks like real bursty traffic; the daily total averages
-          within ±10&nbsp;% of the hourly rate set below.
-          <strong>Detection risk — owner's call.</strong></p>
-        <div class="form-grid">
-          <label class="checkbox-row">
-            <input type="checkbox" id="fakeUploadToggle">
-            <span>Enable fake upload credit <strong>(ban risk — owner's call)</strong></span>
-          </label>
-          <label>Hourly rate (MB/hr)
-            <input type="number" id="fakeUploadRate" min="1" step="1" value="250" style="width:7rem">
-          </label>
-          <div class="form-actions" style="grid-column:1/-1">
-            <button type="button" class="btn small" id="fakeUploadSaveBtn">Save</button>
-            <span class="form-msg" id="fakeUploadMsg"></span>
+      <div class="grid-2">
+
+        <div class="card">
+          <h2>Fake upload credit</h2>
+          <p class="muted small">Inflates the <code>uploaded</code> counter reported to the tracker
+            on every announce. Each announce uses a randomised delta; the daily total averages
+            within ±10&nbsp;% of the hourly rate. <strong>Detection risk — owner's call.</strong></p>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" id="fakeUploadToggle">
+              <span>Enable fake upload credit <strong>(ban risk — owner's call)</strong></span>
+            </label>
+            <label>Hourly rate (MB/hr)
+              <input type="number" id="fakeUploadRate" min="1" step="1" value="250" style="width:7rem">
+            </label>
+            <div class="form-actions" style="grid-column:1/-1">
+              <button type="button" class="btn small" id="fakeUploadSaveBtn">Save</button>
+              <span class="form-msg" id="fakeUploadMsg"></span>
+            </div>
           </div>
         </div>
+
+        <div class="card">
+          <h2>Fake download credit</h2>
+          <p class="muted small">Adds to the <code>downloaded</code> counter beyond the one-hour
+            bootstrap ramp, so the total keeps growing organically. Same unpredictable variance as
+            the upload side. Default ≈ 1&nbsp;GiB/day (43&nbsp;MB/hr).
+            <strong>Detection risk — owner's call.</strong></p>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" id="fakeDownloadToggle">
+              <span>Enable fake download credit <strong>(ban risk — owner's call)</strong></span>
+            </label>
+            <label>Hourly rate (MB/hr)
+              <input type="number" id="fakeDownloadRate" min="1" step="1" value="43" style="width:7rem">
+            </label>
+            <div class="form-actions" style="grid-column:1/-1">
+              <button type="button" class="btn small" id="fakeDownloadSaveBtn">Save</button>
+              <span class="form-msg" id="fakeDownloadMsg"></span>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -226,6 +249,7 @@ function render(s) {
       ['Topic', b.topic_id || '—'],
       ['Infohash', b.infohash ? b.infohash.slice(0,12)+'…' : '—'],
       ['First download', fmtDateTime(b.first_download_at)],
+      ['Downloaded (fake)', fmt(b.downloaded_total)],
       ['Uploaded (fake)', fmt(b.uploaded_total)],
       ['Next announce', s.loop?.phase === 'waiting' ? 'soon' : s.loop?.phase],
     ]);
@@ -238,10 +262,13 @@ function render(s) {
     $('bootstrapNote').textContent = 'Waiting for bootstrap download… (phase: ' + (s.loop?.phase || '—') + ')';
   }
 
-  // fake upload toggles
+  // fake upload/download toggles
   $('fakeUploadToggle').checked = !!s.fake_upload_credit;
   if (document.activeElement !== $('fakeUploadRate'))
     $('fakeUploadRate').value = s.fake_upload_mb_per_hour || 250;
+  $('fakeDownloadToggle').checked = !!s.fake_download_credit;
+  if (document.activeElement !== $('fakeDownloadRate'))
+    $('fakeDownloadRate').value = s.fake_download_mb_per_hour || 43;
 }
 
 // ---- login form -------------------------------------------------------------
@@ -285,6 +312,19 @@ $('fakeUploadSaveBtn').addEventListener('click', async () => {
   const body = {
     fake_upload_credit: $('fakeUploadToggle').checked,
     fake_upload_mb_per_hour: parseInt($('fakeUploadRate').value) || 250,
+  };
+  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json();
+  if (j.ok) { msg.textContent = 'Saved'; msg.className = 'form-msg ok'; setTimeout(() => msg.textContent='', 2000); }
+  else { msg.textContent = j.error || 'Failed'; msg.className = 'form-msg err'; }
+});
+
+// ---- fake download settings -------------------------------------------------
+$('fakeDownloadSaveBtn').addEventListener('click', async () => {
+  const msg = $('fakeDownloadMsg');
+  const body = {
+    fake_download_credit: $('fakeDownloadToggle').checked,
+    fake_download_mb_per_hour: parseInt($('fakeDownloadRate').value) || 43,
   };
   const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const j = await r.json();
