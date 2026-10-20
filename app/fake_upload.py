@@ -21,7 +21,7 @@ BOOTSTRAP_WINDOW_S = 3600
 BOOTSTRAP_TARGET_BYTES = 1_000_000_000
 
 
-def fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
+def fake_upload_delta_bytes(token: str, mb_per_hour: int, elapsed_s: float = 1800) -> int:
     """Return a randomised per-announce upload delta that averages to
     mb_per_hour over a day, with wide, non-repeating variance.
 
@@ -32,10 +32,9 @@ def fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
     - Extra salt from the announce token keeps torrents out of phase with
       each other, avoiding a suspicious all-torrents-spike-at-once pattern.
 
-    The target per-announce amount is derived from mb_per_hour assuming
-    qBittorrent's default 30-minute announce interval.  At other intervals
-    the daily total still averages correctly because we key off wall-clock
-    time, not announce count.
+    `elapsed_s` is the time this delta covers (default: qBittorrent's 30
+    minute announce interval); the amount scales with it, so the daily total
+    tracks mb_per_hour whatever the real announce cadence is.
     """
     target_bytes_per_hour = mb_per_hour * 1024 * 1024
     tok_salt = int.from_bytes(token.encode()[:4].ljust(4, b"\x00"), "big")
@@ -54,16 +53,16 @@ def fake_upload_delta_bytes(token: str, mb_per_hour: int) -> int:
     noise = random.uniform(0.70, 1.30)
     multiplier *= noise
 
-    base = target_bytes_per_hour / 2.0   # bytes per 30-min window
+    base = target_bytes_per_hour * (elapsed_s / 3600.0)
     delta = int(base * multiplier)
     return max(0, delta)
 
 
-def fake_download_delta_bytes(token: str, mb_per_hour: int) -> int:
+def fake_download_delta_bytes(token: str, mb_per_hour: int, elapsed_s: float = 1800) -> int:
     """Return a randomised per-announce download delta, same variance model as
     fake_upload_delta_bytes but phase-shifted so upload and download deltas
     don't move in lockstep."""
-    return fake_upload_delta_bytes(token + "_dl", mb_per_hour)
+    return fake_upload_delta_bytes(token + "_dl", mb_per_hour, elapsed_s)
 
 
 def bootstrap_downloaded_bytes(target: int, first_download_at: float) -> int:

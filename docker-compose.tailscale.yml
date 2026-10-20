@@ -78,6 +78,10 @@ services:
       - ipv6
     ports:
       - "${SEEDER_PORT:-8010}:8000"
+      # Announce-only listener for a reverse proxy (see Settings -> Public announce
+      # endpoint). Nothing listens here until it is enabled; the host and container
+      # port are kept equal so one variable controls both.
+      - "${PUBLIC_ANNOUNCE_BIND:-0.0.0.0}:${PUBLIC_ANNOUNCE_PORT:-8001}:${PUBLIC_ANNOUNCE_PORT:-8001}"
     restart: unless-stopped
     healthcheck:
       # Socket existing proves tailscaled booted and is listening --
@@ -98,6 +102,9 @@ services:
       QBIT_URL: ${QBIT_URL:-http://gateway:8080}
       GATEWAY_URL: ${GATEWAY_URL:-http://gateway:8081}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      PUBLIC_ANNOUNCE_ENABLED: ${PUBLIC_ANNOUNCE_ENABLED:-false}
+      ANNOUNCE_PORT: ${PUBLIC_ANNOUNCE_PORT:-8001}
+      PUBLIC_ANNOUNCE_URL: ${PUBLIC_ANNOUNCE_URL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
       # Selecting an exit node replaces the shared netns's default route

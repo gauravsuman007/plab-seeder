@@ -9,16 +9,20 @@ compatibility with the single-account deployment this app started as —
 after an upgrade.
 """
 
+import asyncio
 import base64
+import contextlib
 import logging
 import os
 import secrets
+import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -82,7 +86,9 @@ async def lifespan(app: FastAPI):
         engines[row["id"]] = eng
         eng.start()
     db.event(next(iter(engines)), "Seeder started") if engines else None
+    await public_announce.apply()
     yield
+    await public_announce.stop()
     for eng in engines.values():
         await eng.stop()
 
@@ -94,7 +100,7 @@ app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     """Optional: set APP_PASSWORD to require it (any username) for the whole UI."""
-    if APP_PASSWORD and request.url.path != "/healthz":
+    if APP_PASSWORD and request.url.path not in ("/healthz", "/proxy/ann"):
         header = request.headers.get("authorization", "")
         ok = False
         if header.startswith("Basic "):
@@ -213,6 +219,7 @@ async def set_settings(request: Request):
     if before != after:
         for eng in engines.values():
             eng.reconfigure()
+    await public_announce.apply()
     if engines:
         next(iter(engines.values())).db.event("Global settings saved")
     return global_store.public()
@@ -372,8 +379,39 @@ def _bootstrap_downloaded_bytes(account_id: int, token: str, first_download_at: 
     return fake_upload.bootstrap_downloaded_bytes(target, first_download_at)
 
 
+# The tracker diffs the cumulative uploaded= counter between announces, so the
+# fake part must be a running total added to the client's real counter, not a
+# fresh delta each time (that would make the reported value jump up and down).
+# The hourly rate is per account, not per torrent: elapsed time is measured
+# from the account's last credited announce, whichever torrent sent it, so N
+# torrents share one rate instead of each earning it. A long gap (app down)
+# is capped so catching up never lands as one huge spike.
+MAX_CREDIT_GAP_S = 2 * 3600
+_fake_up_lock = asyncio.Lock()
+
+
+async def _fake_uploaded(account_id: int, token: str, real_up: int, mb_per_hour: int) -> int:
+    async with _fake_up_lock:
+        now = time.time()
+        last = float(db.meta(account_id, "fakeup_last_at") or 0)
+        elapsed = min(now - last, MAX_CREDIT_GAP_S) if last else 1800
+        delta = fake_upload.fake_upload_delta_bytes(token, mb_per_hour, max(elapsed, 0))
+        offset = int(db.meta(account_id, f"fakeup_offset:{token}") or 0) + delta
+        # Never report less than before (e.g. the torrent was re-added and the
+        # client's own counter restarted from zero).
+        reported = max(real_up + offset, int(db.meta(account_id, f"fakeup_last:{token}") or 0))
+        db.set_meta(account_id, f"fakeup_offset:{token}", reported - real_up)
+        db.set_meta(account_id, f"fakeup_last:{token}", reported)
+        db.set_meta(account_id, "fakeup_last_at", now)
+        return reported
+
+
 @app.get("/proxy/ann")
 async def announce_proxy(request: Request):
+    return await _announce(request)
+
+
+async def _announce(request: Request) -> Response:
     """Relay a tracker announce, reporting downloaded=0 (or, for a new
     account's bootstrap torrent, a ramping fake total — see
     _bootstrap_downloaded_bytes).
@@ -410,16 +448,13 @@ async def announce_proxy(request: Request):
     fake_upload_credit = s.get("fake_upload_credit", False)
     fake_upload_mb_per_hour = s.get("fake_upload_mb_per_hour", 0)
     if fake_upload_credit and fake_upload_mb_per_hour > 0 and first_download_at:
-        delta = fake_upload.fake_upload_delta_bytes(token, fake_upload_mb_per_hour)
-        new_raw = re.sub(
-            r"(^|&)(uploaded)=(\d+)",
-            lambda m: (m.group(1) or "") + "uploaded=" + str(int(m.group(3)) + delta),
-            raw,
-        )
-        if new_raw == raw:
-            raw += f"&uploaded={delta}"
+        m = re.search(r"(?:^|&)uploaded=(\d+)", raw)
+        real_up = int(m.group(1)) if m else 0
+        reported = await _fake_uploaded(account_id, token, real_up, fake_upload_mb_per_hour)
+        if m:
+            raw = re.sub(r"(^|&)uploaded=\d+", rf"\g<1>uploaded={reported}", raw)
         else:
-            raw = new_raw
+            raw += f"&uploaded={reported}"
 
     eng = engines.get(account_id)
     ip = ((eng.qbit.get("transfer") or {}) if eng else {}).get("last_external_address_v4")
@@ -433,6 +468,123 @@ async def announce_proxy(request: Request):
     except Exception as e:
         log.warning("announce proxy error: %s", type(e).__name__)
         return Response(b"d14:failure reason11:proxy errore", media_type="text/plain")
+
+
+# --------------------------------------------------------------------------- #
+# public announce listener
+# --------------------------------------------------------------------------- #
+# A second HTTP server that serves *only* /proxy/ann (no dashboard, no API, no
+# docs, no auth middleware, no access log -- the token is in the URL). Point a
+# reverse proxy at its port and the announce proxy is public while the rest of
+# the app stays private. Tokens are random and map to the real tracker URL
+# server-side, so the passkey never appears in a public URL.
+public_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@public_app.get("/proxy/ann")
+async def public_announce(request: Request):
+    return await _announce(request)
+
+
+class _EmbeddedServer(uvicorn.Server):
+    """uvicorn.Server that leaves signal handling to the main server."""
+    def install_signal_handlers(self) -> None:
+        pass
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        yield
+
+
+class PublicAnnounce:
+    def __init__(self):
+        self.server: _EmbeddedServer | None = None
+        self.task: asyncio.Task | None = None
+        self.port: int | None = None
+        self.error = ""
+
+    @property
+    def listening(self) -> bool:
+        return bool(self.task and not self.task.done() and self.server and self.server.started)
+
+    async def stop(self) -> None:
+        if self.server:
+            self.server.should_exit = True
+        if self.task:
+            try:
+                await asyncio.wait_for(self.task, 5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self.task.cancel()
+        self.server = self.task = self.port = None
+
+    async def apply(self) -> None:
+        """Make the listener match the settings (start, stop, or move port)."""
+        g = global_store.settings
+        want = g.public_announce_enabled
+        if self.task and not self.task.done() and want and self.port == g.public_announce_port:
+            return
+        await self.stop()
+        self.error = ""
+        if not want:
+            return
+        port = g.public_announce_port
+        if not 1 <= port <= 65535 or port == 8000:
+            self.error = f"port {port} is not usable (1-65535, and not the dashboard's 8000)"
+            return
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as uvicorn does, so TIME_WAIT isn't a false "in use"
+            try:
+                probe.bind(("0.0.0.0", port))
+            except OSError as e:
+                self.error = f"cannot listen on port {port}: {e.strerror}"
+                return
+        cfg = uvicorn.Config(public_app, host="0.0.0.0", port=port, log_level="warning", access_log=False)
+        self.server = _EmbeddedServer(cfg)
+        self.port = port
+        self.task = asyncio.create_task(self._run(self.server), name="public-announce")
+
+    async def _run(self, server: _EmbeddedServer) -> None:
+        try:
+            await server.serve()
+        except (SystemExit, Exception) as e:  # noqa: BLE001 -- must never take the app down
+            self.error = f"listener stopped: {e}"
+            log.warning(self.error)
+
+
+public_announce = PublicAnnounce()
+
+
+def _public_announce_status() -> dict:
+    g = global_store.settings
+    base = g.public_announce_url.rstrip("/")
+    return {
+        "enabled": g.public_announce_enabled, "port": g.public_announce_port,
+        "listening": public_announce.listening, "error": public_announce.error,
+        "public_url": base, "announce_template": f"{base}/proxy/ann?t=<token>" if base else "",
+    }
+
+
+@app.get("/api/public-announce")
+async def public_announce_status():
+    return _public_announce_status()
+
+
+@app.post("/api/public-announce/test")
+async def public_announce_test():
+    """Fetch the public URL from this container: a reachable, working
+    listener answers an unknown token with a bencoded 'bad token' failure."""
+    base = global_store.settings.public_announce_url.rstrip("/")
+    if not base:
+        return {"ok": False, "detail": "Set the public URL first."}
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            r = await client.get(f"{base}/proxy/ann?t=selftest")
+    except httpx.HTTPError as e:
+        return {"ok": False, "detail": f"Could not reach {base}: {type(e).__name__}"}
+    if b"bad token" in r.content:
+        return {"ok": True, "detail": "Reachable: the announce listener answered."}
+    return {"ok": False, "detail": f"{base} answered HTTP {r.status_code} but not from the announce listener "
+                                   f"(check the reverse proxy points at port {global_store.settings.public_announce_port})."}
 
 
 @app.post("/api/proxy-trackers/{infohash}")

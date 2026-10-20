@@ -205,6 +205,33 @@
       <div class="grid-2">
 
         <div class="card">
+          <h2>Public announce endpoint</h2>
+          <p class="muted small">Serves <em>only</em> <code>/proxy/ann</code> on its own port, so a reverse proxy
+            can make the announce proxy reachable from the internet (e.g. for a debrid service) while the
+            dashboard stays private. Point the reverse proxy at this container's port below and enter the
+            address it serves. Tokens are random and the passkey never appears in the public URL.</p>
+          <div class="form-grid">
+            <label class="checkbox-row">
+              <input type="checkbox" name="public_announce_enabled">
+              <span>Enable the public announce listener</span>
+            </label>
+            <label>Listen port (inside the container)
+              <input type="number" name="public_announce_port" min="1" max="65535">
+            </label>
+            <label>Public URL (what the reverse proxy serves)
+              <input type="text" name="public_announce_url" placeholder="https://ann.example.com">
+            </label>
+          </div>
+          <p class="muted small">The port must match the host port published in docker-compose
+            (<code>PUBLIC_ANNOUNCE_PORT</code>, default 8001). Changing it here moves the listener on Save;
+            the compose mapping still has to match.</p>
+          <div class="form-actions">
+            <button type="button" class="btn small" id="publicAnnounceTestBtn">Test public URL</button>
+            <span class="form-msg" id="publicAnnounceMsg"></span>
+          </div>
+        </div>
+
+        <div class="card">
           <h2>qBittorrent connection</h2>
           <div class="form-grid">
             <label>WebUI URL <input type="text" name="qbit_url"></label>

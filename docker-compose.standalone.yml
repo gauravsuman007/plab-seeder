@@ -50,11 +50,18 @@ services:
       # incident this sidesteps from the start).
       SELF_URL: ${SELF_URL:-http://192.168.209.10:8000}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      PUBLIC_ANNOUNCE_ENABLED: ${PUBLIC_ANNOUNCE_ENABLED:-false}
+      ANNOUNCE_PORT: ${PUBLIC_ANNOUNCE_PORT:-8001}
+      PUBLIC_ANNOUNCE_URL: ${PUBLIC_ANNOUNCE_URL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./data/seeder:/data
     ports:
       - "${SEEDER_PORT:-8040}:8000"
+      # Announce-only listener for a reverse proxy (see Settings -> Public announce
+      # endpoint). Nothing listens here until it is enabled; the host and container
+      # port are kept equal so one variable controls both.
+      - "${PUBLIC_ANNOUNCE_BIND:-0.0.0.0}:${PUBLIC_ANNOUNCE_PORT:-8001}:${PUBLIC_ANNOUNCE_PORT:-8001}"
     networks:
       pornolab_standalone:
         ipv4_address: 192.168.209.10

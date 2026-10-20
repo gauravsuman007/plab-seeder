@@ -220,9 +220,9 @@ async def _announce_once() -> None:
 
     bootstrap_dl = fake_upload.bootstrap_downloaded_bytes(target, first_at)
     if s.fake_upload_credit and s.fake_upload_mb_per_hour > 0:
-        uploaded_total += fake_upload.fake_upload_delta_bytes(infohash, s.fake_upload_mb_per_hour)
+        uploaded_total += fake_upload.fake_upload_delta_bytes(infohash, s.fake_upload_mb_per_hour, ANNOUNCE_INTERVAL_S)
     if s.fake_download_credit and s.fake_download_mb_per_hour > 0:
-        downloaded_extra += fake_upload.fake_download_delta_bytes(infohash, s.fake_download_mb_per_hour)
+        downloaded_extra += fake_upload.fake_download_delta_bytes(infohash, s.fake_download_mb_per_hour, ANNOUNCE_INTERVAL_S)
     _db.set_meta("fq:uploaded_total", uploaded_total)
     _db.set_meta("fq:downloaded_extra", downloaded_extra)
     downloaded = bootstrap_dl + downloaded_extra

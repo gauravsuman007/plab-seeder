@@ -49,6 +49,15 @@ class GlobalSettings:
     # this app any more (see plab-register), this just points at it.
     register_url: str = os.environ.get("REGISTER_URL", "")
 
+    # Public announce listener: a second, announce-only HTTP server so a
+    # reverse proxy can expose /proxy/ann to the internet (e.g. for a debrid
+    # service that must reach the rewritten announce URL) without exposing
+    # the dashboard. The port is the one the listener binds *inside* the
+    # container; docker-compose publishes the matching host port.
+    public_announce_enabled: bool = os.environ.get("PUBLIC_ANNOUNCE_ENABLED", "").lower() in ("1", "true", "yes")
+    public_announce_port: int = int(os.environ.get("ANNOUNCE_PORT", "8001"))
+    public_announce_url: str = os.environ.get("PUBLIC_ANNOUNCE_URL", "")   # what the reverse proxy serves, e.g. https://ann.example.com
+
 
 @dataclass
 class AccountSettings:

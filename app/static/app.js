@@ -519,9 +519,32 @@ async function loadSettings() {
   ]);
   fillForm($("#globalSettingsForm"), g);
   fillForm($("#accountSettingsForm"), a);
+  await showPublicAnnounceStatus();
+}
+
+async function showPublicAnnounceStatus() {
+  const msg = $("#publicAnnounceMsg");
+  try {
+    const st = await api("GET", "/api/public-announce");
+    if (st.error) { msg.textContent = st.error; msg.className = "form-msg err"; }
+    else if (st.enabled) {
+      msg.textContent = st.listening ? `Listening on port ${st.port}.` : "Starting…";
+      msg.className = "form-msg " + (st.listening ? "ok" : "");
+    } else { msg.textContent = "Disabled."; msg.className = "form-msg"; }
+  } catch (e) { /* status is informational */ }
 }
 
 function initSettings() {
+  $("#publicAnnounceTestBtn").addEventListener("click", async () => {
+    const msg = $("#publicAnnounceMsg");
+    msg.textContent = "Testing…"; msg.className = "form-msg";
+    try {
+      const r = await api("POST", "/api/public-announce/test");
+      msg.textContent = r.detail;
+      msg.className = "form-msg " + (r.ok ? "ok" : "err");
+    } catch (e) { msg.textContent = e.message; msg.className = "form-msg err"; }
+  });
+
   $("#globalSettingsForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const msg = $("#globalSettingsMsg");
