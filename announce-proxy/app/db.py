@@ -50,6 +50,19 @@ create table if not exists tokens (
     last_reported_up integer not null default 0
 );
 create index if not exists tokens_identity on tokens(identity_id);
+-- Counters belong to a torrent, not to a token: several torrents of one account share
+-- a tracker URL, hence a token, but each has its own cumulative uploaded/downloaded.
+create table if not exists torrent_state (
+    token text not null,
+    info_hash text not null,
+    last_real_up integer not null default 0,
+    last_real_down integer not null default 0,
+    fake_offset integer not null default 0,
+    last_reported_up integer not null default 0,
+    announces integer not null default 0,
+    last_announce_at real,
+    primary key (token, info_hash)
+);
 create table if not exists hourly (
     client_id integer not null,
     identity_id integer not null,
@@ -108,6 +121,10 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._lock = threading.Lock()
+        cols = {r["name"] for r in self.conn.execute("pragma table_info(tokens)")}
+        if "bootstrap_info_hash" not in cols:       # which torrent the bootstrap ramp belongs to
+            self.conn.execute("alter table tokens add column bootstrap_info_hash text not null default ''")
+            self.conn.commit()
 
     def execute(self, sql: str, args=()) -> sqlite3.Cursor:
         with self._lock:

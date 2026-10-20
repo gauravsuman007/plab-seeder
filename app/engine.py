@@ -589,7 +589,7 @@ class Engine:
         for t in list(self.torrents):
             moved += await self.proxy_existing(t["hash"])
         ip = (self.qbit.get("transfer") or {}).get("last_external_address_v4")
-        if ip and ip != self._pushed_ip:
+        if ip and self.torrents and ip != self._pushed_ip:      # idle accounts stay off the proxy dashboard
             await remote.set_ip(self.label(), ip)
             self._pushed_ip = ip
         if moved:

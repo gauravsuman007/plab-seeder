@@ -43,8 +43,8 @@ class Env:
         assert r.status_code == 200, r.text
         return r.json()
 
-    async def announce(self, token, up=0, down=0, **extra):
-        q = f"info_hash=%AB&peer_id=-qB4600-xxxxxxxxxxxx&port=6881&uploaded={up}&downloaded={down}&left=0"
+    async def announce(self, token, up=0, down=0, info_hash="%AB", **extra):
+        q = f"info_hash={info_hash}&peer_id=-qB4600-xxxxxxxxxxxx&port=6881&uploaded={up}&downloaded={down}&left=0"
         for k, v in extra.items():
             q += f"&{k}={v}"
         return await self.ann.get(f"/ann?t={token}&{q}", headers={"User-Agent": "qBittorrent/5.0.0"})
@@ -225,7 +225,7 @@ def test_stats_and_ui_api(tmp_path):
         ov = (await env.ui.get("/api/overview")).json()
         c = ov["clients"][0]
         assert c["name"] == "seeder-a" and c["announces_24h"] == 2
-        assert c["real_up_24h"] == 3000 and c["hidden_down_24h"] == 90_000 and c["fake_up_24h"] > 0
+        assert c["real_up_24h"] == 2000 and c["hidden_down_24h"] == 40_000 and c["fake_up_24h"] > 0   # first sight is only a baseline
         assert c["identities"][0]["label"] == "acct1" and ov["totals"]["tokens"] == 1
         tr = (await env.ui.get("/api/trend?range=24h")).json()
         assert len(tr["series"][0]["points"]) == 24 and sum(p[1] for p in tr["series"][0]["points"]) == 2
@@ -255,4 +255,51 @@ def test_ui_client_management(tmp_path):
         assert (await env.ui.delete(f"/api/clients/{cid}")).status_code == 200
         bad = await env.ui.patch("/api/identities/999", json={"fake_upload": True})
         assert bad.status_code == 404
+    run(t, tmp_path)
+
+
+def test_torrents_sharing_a_token_keep_separate_counters(tmp_path):
+    """Regression: five torrents of one account share a tracker URL (so a token). Their
+    cumulative counters must not leak into each other -- a torrent that has uploaded 100 KB
+    must never be reported as having uploaded the 5 GB of its sibling."""
+    async def t(env):
+        a = await env.register(first_download_at=time.time() - 86400)
+        big, small = "%01%02", "%03%04"
+        await env.announce(a["token"], up=5_000_000_000, down=2_000_000_000, info_hash=big, event="started")
+        await env.announce(a["token"], up=148_327, down=500_000_000, info_hash=small, event="started")
+        assert env.seen[-1]["uploaded"] == "148327", "sibling's counter leaked into this torrent"
+        await env.announce(a["token"], up=6_000_000_000, down=2_100_000_000, info_hash=big)
+        assert env.seen[-1]["uploaded"] == "6000000000" and env.seen[-1]["downloaded"] == "0"
+        await env.announce(a["token"], up=200_000, info_hash=small)
+        assert env.seen[-1]["uploaded"] == "200000"
+        ov = (await env.ui.get("/api/overview")).json()["clients"][0]
+        assert ov["real_up_24h"] == 1_000_000_000 + 51_673 and ov["hidden_down_24h"] == 100_000_000   # deltas, not lifetime totals
+    run(t, tmp_path)
+
+
+def test_fake_offsets_are_per_torrent(tmp_path):
+    async def t(env):
+        a = await env.register(first_download_at=time.time() - 86400)
+        env.db.execute("update identities set fake_upload=1, fake_mb_per_hour=250")
+        clock = [time.time()]
+        with mock.patch("time.time", lambda: clock[0]):
+            for ih, real in (("%01", 5_000_000_000), ("%02", 1_000)):
+                clock[0] += 1800
+                await env.announce(a["token"], up=real, info_hash=ih)
+                rep = int(env.seen[-1]["uploaded"])
+                assert real <= rep < real + 400 * 1024 * 1024, (ih, rep)      # only its own, bounded top-up
+    run(t, tmp_path)
+
+
+def test_bootstrap_ramp_belongs_to_the_first_torrent_only(tmp_path):
+    async def t(env):
+        a = await env.register(bootstrap=True)
+        start = _identity(env)["first_download_at"]
+        with mock.patch("time.time", lambda: start + 1800):
+            await env.announce(a["token"], down=555, info_hash="%AA")
+            assert int(env.seen[-1]["downloaded"]) > 0
+            await env.announce(a["token"], down=555, info_hash="%BB")        # a sibling torrent on the same URL
+            assert env.seen[-1]["downloaded"] == "0"
+            await env.announce(a["token"], down=555, info_hash="%AA")
+            assert int(env.seen[-1]["downloaded"]) > 0
     run(t, tmp_path)

@@ -15,7 +15,7 @@ import re
 import secrets
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import unquote_to_bytes, urlparse
 
 import httpx
 
@@ -112,22 +112,37 @@ async def announce(db: DB, http: httpx.AsyncClient, *, token: str, query: str,
 
     raw = re.sub(r"(^|&)t=[^&]*", "", query).lstrip("&")
     event = (re.search(r"(?:^|&)event=([a-z]+)", raw) or [None, ""])[1]
-    real_up, _ = _num(raw, "uploaded")
+    real_up, up_present = _num(raw, "uploaded")
     real_down, down_present = _num(raw, "downloaded")
-    up_present = _num(raw, "uploaded")[1]
 
-    # What the client sent since its last announce (a restart resets its counters).
-    d_real_up = real_up - t["last_real_up"] if real_up >= t["last_real_up"] else real_up
-    d_hidden_down = real_down - t["last_real_down"] if real_down >= t["last_real_down"] else real_down
+    # Several torrents of one account share a tracker URL, hence this token; every
+    # counter below belongs to the torrent (info_hash), never to the token.
+    m = re.search(r"(?:^|&)info_hash=([^&]*)", raw)
+    ih = unquote_to_bytes(m.group(1)).hex() if m else ""
+    st = db.one("select * from torrent_state where token=? and info_hash=?", (token, ih))
+    first_sight = st is None
+    st = st or {"last_real_up": 0, "last_real_down": 0, "fake_offset": 0, "last_reported_up": 0, "announces": 0}
 
-    rep_up, rep_down, fake_added = real_up, real_down, 0
+    # What the client sent since its last announce (a restart resets its counters). The first
+    # time a torrent is seen only sets the baseline: its lifetime totals aren't "new" traffic.
+    if first_sight:
+        d_real_up = d_hidden_down = 0
+    else:
+        d_real_up = real_up - st["last_real_up"] if real_up >= st["last_real_up"] else real_up
+        d_hidden_down = real_down - st["last_real_down"] if real_down >= st["last_real_down"] else real_down
+
+    rep_up, rep_down, offset, fake_added = real_up, real_down, 0, 0
     if not t["passthrough"]:
         # downloaded: 0, except a brand-new account's first torrent ramps a fake total
         # over its first hour (see fakecredit.bootstrap_downloaded).
         rep_down = 0
-        if (t["is_bootstrap"] and ident["first_download_at"]
-                and time.time() - ident["first_download_at"] < fakecredit.BOOTSTRAP_WINDOW_S):
-            rep_down = fakecredit.bootstrap_downloaded(t["bootstrap_target"], ident["first_download_at"])
+        if t["is_bootstrap"] and ident["first_download_at"]:
+            claimed = t["bootstrap_info_hash"]
+            if not claimed:                      # the bootstrap belongs to the first torrent to announce
+                db.execute("update tokens set bootstrap_info_hash=? where token=?", (ih, token))
+                claimed = ih
+            if claimed == ih and time.time() - ident["first_download_at"] < fakecredit.BOOTSTRAP_WINDOW_S:
+                rep_down = fakecredit.bootstrap_downloaded(t["bootstrap_target"], ident["first_download_at"])
 
         # uploaded: real + a persisted running offset that only ever grows, so the
         # tracker sees a counter that never goes backwards. The hourly rate is per
@@ -135,22 +150,27 @@ async def announce(db: DB, http: httpx.AsyncClient, *, token: str, query: str,
         # whichever torrent sent it, so N torrents share one rate.
         async with _credit_lock:
             ident = db.one("select * from identities where id=?", (ident["id"],))
-            offset = t["fake_offset"]
+            offset = st["fake_offset"]
             if ident["fake_upload"] and ident["fake_mb_per_hour"] > 0 and ident["first_download_at"]:
                 now = time.time()
                 last = ident["fake_last_at"]
                 elapsed = min(now - last, MAX_CREDIT_GAP_S) if last else 1800
-                offset += fakecredit.upload_delta_bytes(token, ident["fake_mb_per_hour"], max(elapsed, 0))
+                offset += fakecredit.upload_delta_bytes(token + ih, ident["fake_mb_per_hour"], max(elapsed, 0))
                 db.execute("update identities set fake_last_at=? where id=?", (now, ident["id"]))
-            rep_up = max(real_up + offset, t["last_reported_up"])
-            fake_added = max(0, (rep_up - real_up) - t["fake_offset"])
-            db.execute("update tokens set fake_offset=?, last_reported_up=? where token=?",
-                       (rep_up - real_up, rep_up, token))
+            rep_up = max(real_up + offset, st["last_reported_up"])
+            fake_added = max(0, (rep_up - real_up) - st["fake_offset"])
+            offset = rep_up - real_up
         raw = _set(raw, "downloaded", rep_down, down_present)
         raw = _set(raw, "uploaded", rep_up, up_present)
 
-    db.execute("update tokens set last_real_up=?, last_real_down=?, announces=announces+1, last_announce_at=?"
-               " where token=?", (real_up, real_down, time.time(), token))
+    db.execute(
+        "insert into torrent_state(token, info_hash, last_real_up, last_real_down, fake_offset, last_reported_up,"
+        " announces, last_announce_at) values (?,?,?,?,?,?,1,?)"
+        " on conflict(token, info_hash) do update set last_real_up=excluded.last_real_up,"
+        " last_real_down=excluded.last_real_down, fake_offset=excluded.fake_offset,"
+        " last_reported_up=excluded.last_reported_up, announces=announces+1, last_announce_at=excluded.last_announce_at",
+        (token, ih, real_up, real_down, offset, rep_up if not t["passthrough"] else 0, time.time()))
+    db.execute("update tokens set announces=announces+1, last_announce_at=? where token=?", (time.time(), token))
 
     if ident["ip"] and not re.search(r"(?:^|&)ip=", raw):
         raw += f"&ip={ident['ip']}"
