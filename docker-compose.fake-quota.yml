@@ -20,6 +20,10 @@ services:
       DATA_DIR: /data
       PORNOLAB_URL: ${PORNOLAB_URL:-https://pornolab.net}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      # Optional external announce proxy (the announce-proxy container): its announce-port URL and
+      # this client's key from its Clients tab. Blank = use this app's built-in proxy.
+      ANNOUNCE_PROXY_URL: ${ANNOUNCE_PROXY_URL:-}
+      ANNOUNCE_PROXY_KEY: ${ANNOUNCE_PROXY_KEY:-}
       # Candidate selection for the one bootstrap download.
       SCAN_PAGES: ${SCAN_PAGES:-3}
       SCAN_ORDER: ${SCAN_ORDER:-11}

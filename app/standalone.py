@@ -40,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from . import fake_upload
 from .bencode import BencodeError, decode, torrent_meta
 from .parsing import Release
+from .proxyclient import AnnounceProxy, ProxyError
 from .pornolab import CaptchaRequired, NotLoggedIn, Pornolab, PornolabError
 from .store import (
     DB, GlobalSettingsStore, AccountStore, AccountSettingsHandle, AccountDB,
@@ -187,8 +188,35 @@ async def _bootstrap() -> None:
     _db.event(f"Bootstrap: fetched '{candidate.title}' ({meta['size']} bytes) as topic {candidate.topic_id}")
 
 
+async def _proxied_announce_url(real_url: str) -> str | None:
+    """The URL to announce to: the real tracker URL, or -- with an announce proxy
+    configured -- the proxy's URL for it. None means the proxy is configured but
+    refused us: skip this announce rather than send it unproxied.
+
+    Registered as passthrough: this mode already computes its own counters, so the
+    proxy relays them as they are (and just shows the client on its dashboard)."""
+    g = global_store.settings
+    url, key = g.announce_proxy_url.strip(), g.announce_proxy_key
+    if not (url and key):
+        return real_url
+    marker = f"{url}|{real_url}"
+    if _db.meta("fq:proxy_for") == marker and _db.meta("fq:proxy_url"):
+        return _db.meta("fq:proxy_url")
+    first_at = _db.meta("fq:first_download_at")
+    try:
+        proxied = await AnnounceProxy(url, key).register(
+            real_url, _store_handle.settings.pornolab_username or "fake-quota",
+            first_download_at=float(first_at) if first_at else None, passthrough=True)
+    except ProxyError as e:
+        _db.event(f"Announce skipped: {e}", "warning")
+        return None
+    _db.set_meta("fq:proxy_for", marker)
+    _db.set_meta("fq:proxy_url", proxied)
+    return proxied
+
+
 async def _announce_once() -> None:
-    """Send one direct announce to the real tracker URL."""
+    """Send one announce (straight to the tracker, or via the announce proxy)."""
     global loop_status
 
     infohash = _db.meta("fq:infohash")
@@ -240,6 +268,9 @@ async def _announce_once() -> None:
         qs += f"&key={announce_key}"
     if is_first:
         qs += "&event=started"
+    announce_url = await _proxied_announce_url(announce_url)
+    if announce_url is None:
+        return
     sep = "&" if "?" in announce_url else "?"
     url = announce_url + sep + qs
 
@@ -368,6 +399,8 @@ async def state():
         "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour,
         "fake_download_credit": s.fake_download_credit,
         "fake_download_mb_per_hour": s.fake_download_mb_per_hour,
+        "announce_proxy_url": global_store.settings.announce_proxy_url,
+        "announce_proxy_set": bool(global_store.settings.announce_proxy_url and global_store.settings.announce_proxy_key),
         "bootstrap": {
             "done": bool(_db.meta("fq:infohash")),
             "skipped": bool(_db.meta("fq:skip") or loop_status.get("bootstrap_skipped")),
@@ -463,6 +496,24 @@ async def save_settings(request: Request):
             "fake_upload_mb_per_hour": s.fake_upload_mb_per_hour,
             "fake_download_credit": s.fake_download_credit,
             "fake_download_mb_per_hour": s.fake_download_mb_per_hour}
+
+
+@app.post("/api/announce-proxy")
+async def save_announce_proxy(request: Request):
+    """Save the proxy URL/key (blank key = keep the saved one) and test the connection."""
+    b = await _body(request)
+    global_store.update({"announce_proxy_url": (b.get("url") or "").strip(), "announce_proxy_key": b.get("key") or ""})
+    g = global_store.settings
+    if not g.announce_proxy_url:
+        return {"ok": True, "detail": "Announcing straight to the tracker (no proxy)."}
+    if not g.announce_proxy_key:
+        return {"ok": False, "detail": "Enter this client's API key."}
+    try:
+        who = await AnnounceProxy(g.announce_proxy_url, g.announce_proxy_key).whoami()
+    except ProxyError as e:
+        return {"ok": False, "detail": str(e)}
+    _db.set_meta("fq:proxy_for", "")            # re-register against the (possibly new) proxy
+    return {"ok": True, "detail": f"Connected as client '{who['client']}'. Announces now go through {who['announce_base']}."}
 
 
 @app.get("/api/events")

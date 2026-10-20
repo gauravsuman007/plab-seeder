@@ -91,27 +91,41 @@ def _rewrite_announce_url(url: bytes, proxy_base: str, register) -> bytes:
     return f"{proxy_base.rstrip('/')}/proxy/ann?t={register(u)}".encode()
 
 
-def redirect_announce(data: bytes, proxy_base: str, register) -> bytes:
-    """Rewrite all announce URLs to go through the local announce proxy.
+def _announce_list(torrent: dict) -> list[bytes]:
+    urls = []
+    if b"announce" in torrent:
+        urls.append(torrent[b"announce"])
+    for tier in torrent.get(b"announce-list", []):
+        urls.extend(tier)
+    return urls
 
-    The proxy strips downloaded bytes from every announce, so the tracker
-    cannot attribute downloaded data to this account.  The passkey is carried
-    server-side inside the proxy so qBittorrent never sees it.
 
-    The info dict is left byte-for-byte identical so the infohash is preserved.
-    """
+def announce_urls(data: bytes) -> list[str]:
+    """Every distinct http(s) announce URL in a .torrent, in order."""
+    torrent = decode(data)
+    if not isinstance(torrent, dict):
+        raise BencodeError("top-level value is not a dict")
+    seen: list[str] = []
+    for u in _announce_list(torrent):
+        s = u.decode("utf-8", "replace")
+        if s.startswith(("http://", "https://")) and s not in seen:
+            seen.append(s)
+    return seen
+
+
+def _rewrite(data: bytes, rewrite_url) -> bytes:
+    """Re-encode a .torrent with every announce URL passed through `rewrite_url`.
+
+    The info dict is left byte-for-byte identical so the infohash is preserved."""
     torrent = decode(data)
     if not isinstance(torrent, dict):
         raise BencodeError("top-level value is not a dict")
 
     if b"announce" in torrent:
-        torrent[b"announce"] = _rewrite_announce_url(torrent[b"announce"], proxy_base, register)
+        torrent[b"announce"] = rewrite_url(torrent[b"announce"])
 
     if b"announce-list" in torrent:
-        torrent[b"announce-list"] = [
-            [_rewrite_announce_url(u, proxy_base, register) for u in tier]
-            for tier in torrent[b"announce-list"]
-        ]
+        torrent[b"announce-list"] = [[rewrite_url(u) for u in tier] for tier in torrent[b"announce-list"]]
 
     start, end = _info_span(data)
     original_info_bytes = data[start:end]
@@ -124,6 +138,24 @@ def redirect_announce(data: bytes, proxy_base: str, register) -> bytes:
     if needle not in encoded:
         raise BencodeError("could not locate info placeholder in encoded output")
     return encoded.replace(needle, info_key + original_info_bytes, 1)
+
+
+def redirect_announce(data: bytes, proxy_base: str, register) -> bytes:
+    """Rewrite all announce URLs to go through this app's built-in announce proxy.
+
+    The proxy strips downloaded bytes from every announce, so the tracker
+    cannot attribute downloaded data to this account.  The passkey is carried
+    server-side inside the proxy so qBittorrent never sees it.
+    """
+    return _rewrite(data, lambda u: _rewrite_announce_url(u, proxy_base, register))
+
+
+def replace_announces(data: bytes, mapping: dict[str, str]) -> bytes:
+    """Swap announce URLs for the ones in `mapping` (real URL -> proxy URL), as
+    handed out by an external announce proxy. Unmapped URLs are left as they are."""
+    def one(u: bytes) -> bytes:
+        return mapping.get(u.decode("utf-8", "replace"), u.decode("utf-8", "replace")).encode()
+    return _rewrite(data, one)
 
 
 def torrent_meta(data: bytes) -> dict:

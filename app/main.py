@@ -11,24 +11,22 @@ after an upgrade.
 
 import asyncio
 import base64
-import contextlib
 import logging
 import os
 import secrets
-import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 import httpx
-import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import fake_upload
 from .engine import Engine
+from .proxyclient import AnnounceProxy, ProxyError
 from .pornolab import PornolabError
 from .qbit import QbitError
 from .store import (
@@ -86,9 +84,7 @@ async def lifespan(app: FastAPI):
         engines[row["id"]] = eng
         eng.start()
     db.event(next(iter(engines)), "Seeder started") if engines else None
-    await public_announce.apply()
     yield
-    await public_announce.stop()
     for eng in engines.values():
         await eng.stop()
 
@@ -219,10 +215,26 @@ async def set_settings(request: Request):
     if before != after:
         for eng in engines.values():
             eng.reconfigure()
-    await public_announce.apply()
     if engines:
         next(iter(engines.values())).db.event("Global settings saved")
     return global_store.public()
+
+
+@app.post("/api/announce-proxy/test")
+async def announce_proxy_test(request: Request):
+    """Try a URL/key (typed in the Settings form, or the saved ones) against the proxy."""
+    b = await _body(request)
+    g = global_store.settings
+    url = (b.get("url") or g.announce_proxy_url).strip()
+    key = b.get("key") if b.get("key") not in (None, "", "********") else g.announce_proxy_key
+    if not url or not key:
+        return {"ok": False, "detail": "Enter the proxy's announce URL and this client's API key."}
+    try:
+        who = await AnnounceProxy(url, key).whoami()
+    except ProxyError as e:
+        return {"ok": False, "detail": str(e)}
+    return {"ok": True, "detail": f"Connected as client '{who['client']}' ({who['kind']}). "
+                                  f"Torrents will announce via {who['announce_base']}."}
 
 
 @app.get("/api/tailscale/status")
@@ -468,123 +480,6 @@ async def _announce(request: Request) -> Response:
     except Exception as e:
         log.warning("announce proxy error: %s", type(e).__name__)
         return Response(b"d14:failure reason11:proxy errore", media_type="text/plain")
-
-
-# --------------------------------------------------------------------------- #
-# public announce listener
-# --------------------------------------------------------------------------- #
-# A second HTTP server that serves *only* /proxy/ann (no dashboard, no API, no
-# docs, no auth middleware, no access log -- the token is in the URL). Point a
-# reverse proxy at its port and the announce proxy is public while the rest of
-# the app stays private. Tokens are random and map to the real tracker URL
-# server-side, so the passkey never appears in a public URL.
-public_app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-
-
-@public_app.get("/proxy/ann")
-async def public_announce(request: Request):
-    return await _announce(request)
-
-
-class _EmbeddedServer(uvicorn.Server):
-    """uvicorn.Server that leaves signal handling to the main server."""
-    def install_signal_handlers(self) -> None:
-        pass
-
-    @contextlib.contextmanager
-    def capture_signals(self):
-        yield
-
-
-class PublicAnnounce:
-    def __init__(self):
-        self.server: _EmbeddedServer | None = None
-        self.task: asyncio.Task | None = None
-        self.port: int | None = None
-        self.error = ""
-
-    @property
-    def listening(self) -> bool:
-        return bool(self.task and not self.task.done() and self.server and self.server.started)
-
-    async def stop(self) -> None:
-        if self.server:
-            self.server.should_exit = True
-        if self.task:
-            try:
-                await asyncio.wait_for(self.task, 5)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self.task.cancel()
-        self.server = self.task = self.port = None
-
-    async def apply(self) -> None:
-        """Make the listener match the settings (start, stop, or move port)."""
-        g = global_store.settings
-        want = g.public_announce_enabled
-        if self.task and not self.task.done() and want and self.port == g.public_announce_port:
-            return
-        await self.stop()
-        self.error = ""
-        if not want:
-            return
-        port = g.public_announce_port
-        if not 1 <= port <= 65535 or port == 8000:
-            self.error = f"port {port} is not usable (1-65535, and not the dashboard's 8000)"
-            return
-        with socket.socket() as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as uvicorn does, so TIME_WAIT isn't a false "in use"
-            try:
-                probe.bind(("0.0.0.0", port))
-            except OSError as e:
-                self.error = f"cannot listen on port {port}: {e.strerror}"
-                return
-        cfg = uvicorn.Config(public_app, host="0.0.0.0", port=port, log_level="warning", access_log=False)
-        self.server = _EmbeddedServer(cfg)
-        self.port = port
-        self.task = asyncio.create_task(self._run(self.server), name="public-announce")
-
-    async def _run(self, server: _EmbeddedServer) -> None:
-        try:
-            await server.serve()
-        except (SystemExit, Exception) as e:  # noqa: BLE001 -- must never take the app down
-            self.error = f"listener stopped: {e}"
-            log.warning(self.error)
-
-
-public_announce = PublicAnnounce()
-
-
-def _public_announce_status() -> dict:
-    g = global_store.settings
-    base = g.public_announce_url.rstrip("/")
-    return {
-        "enabled": g.public_announce_enabled, "port": g.public_announce_port,
-        "listening": public_announce.listening, "error": public_announce.error,
-        "public_url": base, "announce_template": f"{base}/proxy/ann?t=<token>" if base else "",
-    }
-
-
-@app.get("/api/public-announce")
-async def public_announce_status():
-    return _public_announce_status()
-
-
-@app.post("/api/public-announce/test")
-async def public_announce_test():
-    """Fetch the public URL from this container: a reachable, working
-    listener answers an unknown token with a bencoded 'bad token' failure."""
-    base = global_store.settings.public_announce_url.rstrip("/")
-    if not base:
-        return {"ok": False, "detail": "Set the public URL first."}
-    try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            r = await client.get(f"{base}/proxy/ann?t=selftest")
-    except httpx.HTTPError as e:
-        return {"ok": False, "detail": f"Could not reach {base}: {type(e).__name__}"}
-    if b"bad token" in r.content:
-        return {"ok": True, "detail": "Reachable: the announce listener answered."}
-    return {"ok": False, "detail": f"{base} answered HTTP {r.status_code} but not from the announce listener "
-                                   f"(check the reverse proxy points at port {global_store.settings.public_announce_port})."}
 
 
 @app.post("/api/proxy-trackers/{infohash}")

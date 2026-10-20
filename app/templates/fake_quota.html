@@ -147,6 +147,21 @@
         <span class="form-msg" id="globalMsg"></span>
       </div>
     </div>
+    <div class="card">
+      <h2>Announce proxy</h2>
+      <p class="muted small">Optional: route announces through the standalone <code>announce-proxy</code> container
+        (its announce port) so this client shows up on its dashboard. Leave blank to announce straight to the tracker.
+        You can also set <code>ANNOUNCE_PROXY_URL</code> / <code>ANNOUNCE_PROXY_KEY</code> in the environment.</p>
+      <div class="form-grid">
+        <label>Announce proxy URL <input type="text" id="proxyUrl" placeholder="http://192.168.209.20:8101" autocomplete="off"></label>
+        <label>API key <span class="muted small">(leave blank to keep the saved one)</span>
+          <input type="password" id="proxyKey" placeholder="pap_…" autocomplete="new-password"></label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="saveProxyBtn">Save &amp; test</button>
+        <span class="form-msg" id="proxyMsg"></span>
+      </div>
+    </div>
   </section>
 
   <!-- ============================ EVENTS ============================ -->
@@ -262,6 +277,7 @@ function render(s) {
     $('bootstrapNote').textContent = 'Waiting for bootstrap download… (phase: ' + (s.loop?.phase || '—') + ')';
   }
 
+  if (document.activeElement !== $('proxyUrl')) $('proxyUrl').value = s.announce_proxy_url || '';
   // fake upload/download toggles
   $('fakeUploadToggle').checked = !!s.fake_upload_credit;
   if (document.activeElement !== $('fakeUploadRate'))
@@ -349,6 +365,17 @@ $('saveGlobalBtn').addEventListener('click', async () => {
   // pornolab_url is a GlobalSettings field; we can't set it from account settings.
   // Show a hint instead.
   msg.textContent = 'Set PORNOLAB_URL env var to change the site URL'; msg.className = 'form-msg';
+});
+
+// ---- announce proxy ---------------------------------------------------------
+$('saveProxyBtn').addEventListener('click', async () => {
+  const msg = $('proxyMsg');
+  msg.textContent = 'Testing…'; msg.className = 'form-msg';
+  const r = await fetch('/api/announce-proxy', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url: $('proxyUrl').value, key: $('proxyKey').value})});
+  const d = await r.json();
+  msg.textContent = d.detail; msg.className = 'form-msg ' + (d.ok ? 'ok' : 'err');
+  $('proxyKey').value = '';
 });
 
 // ---- events -----------------------------------------------------------------

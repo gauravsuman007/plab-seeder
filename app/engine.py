@@ -4,13 +4,15 @@ import asyncio
 import logging
 import secrets
 import time
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
 from . import limits, strategy
-from .bencode import BencodeError, torrent_meta, redirect_announce
+from .bencode import BencodeError, announce_urls, redirect_announce, replace_announces, torrent_meta
 from .parsing import Profile, Release
 from .pornolab import CaptchaRequired, LimitReached, NotLoggedIn, Pornolab, PornolabError
+from .proxyclient import AnnounceProxy, ProxyError
 from .qbit import Qbit, QbitError
 
 log = logging.getLogger("seeder")
@@ -42,6 +44,8 @@ class Engine:
         self.tasks: list[asyncio.Task] = []
         self._decide_lock = asyncio.Lock()
         self._last_error: dict[str, str] = {}
+        self._remote: AnnounceProxy | None = None
+        self._pushed_ip: str | None = None
 
         self.profile: Profile | None = None
         self.profile_at: float | None = None
@@ -65,7 +69,8 @@ class Engine:
     # ------------------------------------------------------------------ #
     def start(self) -> None:
         for name, coro in (("qbit", self._qbit_loop), ("profile", self._profile_loop),
-                           ("scan", self._scan_loop), ("decide", self._decide_loop)):
+                           ("scan", self._scan_loop), ("decide", self._decide_loop),
+                           ("announce-proxy", self._proxy_sync_loop)):
             self.tasks.append(asyncio.create_task(self._forever(name, coro), name=name))
 
     async def stop(self) -> None:
@@ -99,6 +104,7 @@ class Engine:
             self.pl = Pornolab(s.pornolab_url, self._cookies_path)
             asyncio.create_task(old_pl.close())
         asyncio.create_task(old_qb.close())
+        self._pushed_ip = None
 
     # ------------------------------------------------------------------ #
     # the guard
@@ -331,7 +337,7 @@ class Engine:
             # already on, which this branch guarantees). Grab the smallest
             # fitting candidate once, ahead of the normal picker, so a
             # brand-new account doesn't start uploading with zero history.
-            if (self.s.fake_upload_credit and hasattr(self.db, "has_first_download")
+            if (await self._fake_upload_wanted() and hasattr(self.db, "has_first_download")
                     and not self.db.has_first_download()):
                 fits = [c for c in self.candidates if c.fits]
                 if fits:
@@ -416,6 +422,16 @@ class Engine:
             raise ValueError(f"would cross the download guard: costs {limits.fmt(g.cost(release.size))}, "
                              f"{limits.fmt(g.headroom)} left")
 
+        remote = self.remote()
+        if remote:
+            # Before spending one of the day's .torrent downloads: a torrent must never
+            # reach qBittorrent with its real announce URL, so an unreachable proxy
+            # stops here rather than after the download.
+            try:
+                await remote.whoami()
+            except ProxyError as e:
+                raise ValueError(str(e)) from e
+
         try:
             data = await self.pl.download(topic_id)
         except LimitReached as e:
@@ -434,10 +450,15 @@ class Engine:
             return token
 
         try:
-            data = redirect_announce(data, self.s.self_url, _register_and_track)
+            if remote:
+                data, minted_tokens = await self._redirect_remote(remote, data, bootstrap=is_first_ever)
+            else:
+                data = redirect_announce(data, self.s.self_url, _register_and_track)
             meta = torrent_meta(data)
         except BencodeError as e:
             raise ValueError(f"PornoLab sent an unreadable .torrent: {e}") from e
+        except ProxyError as e:
+            raise ValueError(str(e)) from e
 
         # The listing's size is rounded; the .torrent's is exact. Check again.
         if not self.guard().fits(meta["size"]):
@@ -522,15 +543,84 @@ class Engine:
         self.db.set_meta(f"ann:{token}", url)
         return token
 
+    # ------------------------------------------------------------------ #
+    # external announce proxy
+    # ------------------------------------------------------------------ #
+    def remote(self) -> AnnounceProxy | None:
+        """The configured announce-proxy container, or None to use the built-in proxy."""
+        url, key = self.s.announce_proxy_url.strip(), self.s.announce_proxy_key
+        if not (url and key):
+            return None
+        if not self._remote or self._remote.base != url.rstrip("/") or self._remote._headers["X-Api-Key"] != key:
+            self._remote = AnnounceProxy(url, key)
+            self._pushed_ip = None
+        return self._remote
+
+    def label(self) -> str:
+        """How this account shows up in the proxy's dashboard (never a secret)."""
+        return (self.s.pornolab_username or f"account-{getattr(self.store, 'account_id', 1)}").strip()
+
+    async def _redirect_remote(self, remote: AnnounceProxy, data: bytes, bootstrap: bool) -> tuple[bytes, list[str]]:
+        first_at = self.db.first_download_at() if hasattr(self.db, "first_download_at") else None
+        mapping: dict[str, str] = {}
+        for i, url in enumerate(announce_urls(data)):
+            mapping[url] = await remote.register(url, self.label(), first_download_at=first_at,
+                                                 bootstrap=bootstrap and i == 0)
+        tokens = [parse_qs(urlparse(u).query).get("t", [""])[0] for u in mapping.values()]
+        return replace_announces(data, mapping), [t for t in tokens if t]
+
+    async def _fake_upload_wanted(self) -> bool:
+        remote = self.remote()
+        if remote:
+            try:
+                return bool((await remote.identity(self.label())).get("fake_upload"))
+            except ProxyError:
+                return False
+        return bool(self.s.fake_upload_credit)
+
+    async def _proxy_sync_loop(self) -> float:
+        """With an external proxy configured: move every torrent's trackers onto it
+        (including ones still pointing at the built-in proxy) and keep the proxy told
+        which public IP qBittorrent is reachable on."""
+        remote = self.remote()
+        if not remote or not self.qbit.get("ok"):
+            return 60
+        moved = 0
+        for t in list(self.torrents):
+            moved += await self.proxy_existing(t["hash"])
+        ip = (self.qbit.get("transfer") or {}).get("last_external_address_v4")
+        if ip and ip != self._pushed_ip:
+            await remote.set_ip(self.label(), ip)
+            self._pushed_ip = ip
+        if moved:
+            self.db.event(f"Moved {moved} tracker(s) onto the external announce proxy")
+        return 300
+
     async def proxy_existing(self, infohash: str) -> int:
-        """Swap a torrent's real tracker URLs for proxy ones (already-added torrents)."""
+        """Swap a torrent's real (or built-in-proxy) tracker URLs for the configured proxy's."""
+        remote = self.remote()
+        first_at = self.db.first_download_at() if hasattr(self.db, "first_download_at") else None
         n = 0
         for t in await self.qb.trackers(infohash):
             u = t.get("url", "")
-            if u.startswith(("http://", "https://")) and "/proxy/ann?t=" not in u:
+            if not u.startswith(("http://", "https://")):
+                continue
+            legacy = "/proxy/ann?t=" in u              # the built-in proxy's own URL shape
+            if remote:
+                if "/ann?t=" in u and not legacy:
+                    continue                            # already an external-proxy URL
+                real = u
+                if legacy:
+                    real = self.db.meta(f"ann:{parse_qs(urlparse(u).query).get('t', [''])[0]}")
+                    if not real:
+                        continue                        # token unknown here: nothing to re-register
+                new = await remote.register(real, self.label(), first_download_at=first_at)
+            else:
+                if legacy:
+                    continue
                 new = f"{self.s.self_url.rstrip('/')}/proxy/ann?t={self.register_announce(u)}"
-                await self.qb.replace_tracker(infohash, u, new)
-                n += 1
+            await self.qb.replace_tracker(infohash, u, new)
+            n += 1
         return n
 
     def state(self) -> dict:
@@ -558,6 +648,7 @@ class Engine:
         return {
             "now": time.time(),
             "auto": self.s.auto,
+            "announce_proxy": bool(self.remote()),
             "guard_override": self.s.guard_override,
             "logged_in": self.logged_in,
             "username": self.s.pornolab_username or None,

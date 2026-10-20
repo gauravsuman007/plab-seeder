@@ -130,11 +130,14 @@ function renderPills(s) {
   pills.push(pill("qBittorrent", s.qbit.ok, s.qbit.ok ? `v${s.qbit.version}` : (s.qbit.error || "down")));
   pills.push(pill("Gateway", s.gateway.ok,
     s.gateway.ok ? `${s.gateway.active ?? "?"}/${s.gateway.desired ?? "?"} tunnels` : (s.gateway.error || "down")));
+  pills.push(pill("Announce proxy", true, s.announce_proxy ? "external" : "built-in"));
   $("#statusPills").innerHTML = pills.join("");
   $("#autoToggle").checked = !!s.auto;
   $("#guardOverrideToggle").checked = !!s.guard_override;
   $("#fakeUploadToggle").checked = !!s.fake_upload_credit;
   if (s.fake_upload_mb_per_hour != null) $("#fakeUploadRate").value = s.fake_upload_mb_per_hour;
+  for (const id of ["#fakeUploadToggle", "#fakeUploadRate", "#fakeUploadSaveBtn"]) $(id).disabled = !!s.announce_proxy;
+  $("#fakeUploadRemoteNote").hidden = !s.announce_proxy;
 }
 
 function pill(label, ok, detail) {
@@ -487,7 +490,7 @@ function renderTorrents(s) {
 // rules), matching app/store.py's GlobalSettings/AccountSettings split —
 // no more guessing which endpoint a field belongs to.
 const LIST_FIELDS = new Set(["exclude_forums"]);
-const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password"]);
+const SECRET_FIELDS = new Set(["qbit_password", "pornolab_password", "announce_proxy_key"]);
 
 function fillForm(form, s) {
   for (const el of form.elements) {
@@ -519,27 +522,16 @@ async function loadSettings() {
   ]);
   fillForm($("#globalSettingsForm"), g);
   fillForm($("#accountSettingsForm"), a);
-  await showPublicAnnounceStatus();
-}
-
-async function showPublicAnnounceStatus() {
-  const msg = $("#publicAnnounceMsg");
-  try {
-    const st = await api("GET", "/api/public-announce");
-    if (st.error) { msg.textContent = st.error; msg.className = "form-msg err"; }
-    else if (st.enabled) {
-      msg.textContent = st.listening ? `Listening on port ${st.port}.` : "Starting…";
-      msg.className = "form-msg " + (st.listening ? "ok" : "");
-    } else { msg.textContent = "Disabled."; msg.className = "form-msg"; }
-  } catch (e) { /* status is informational */ }
 }
 
 function initSettings() {
-  $("#publicAnnounceTestBtn").addEventListener("click", async () => {
-    const msg = $("#publicAnnounceMsg");
+  $("#announceProxyTestBtn").addEventListener("click", async () => {
+    const msg = $("#announceProxyMsg");
+    const f = $("#globalSettingsForm");
     msg.textContent = "Testing…"; msg.className = "form-msg";
     try {
-      const r = await api("POST", "/api/public-announce/test");
+      const r = await api("POST", "/api/announce-proxy/test",
+        { url: f.elements.announce_proxy_url.value, key: f.elements.announce_proxy_key.value });
       msg.textContent = r.detail;
       msg.className = "form-msg " + (r.ok ? "ok" : "err");
     } catch (e) { msg.textContent = e.message; msg.className = "form-msg err"; }

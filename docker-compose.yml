@@ -24,18 +24,15 @@ services:
       # pornolab-seeder` to confirm, and see the 2026-10-12 incident notes.
       SELF_URL: ${SELF_URL:-http://192.168.176.10:8000}
       APP_PASSWORD: ${APP_PASSWORD:-}
-      PUBLIC_ANNOUNCE_ENABLED: ${PUBLIC_ANNOUNCE_ENABLED:-false}
-      ANNOUNCE_PORT: ${PUBLIC_ANNOUNCE_PORT:-8001}
-      PUBLIC_ANNOUNCE_URL: ${PUBLIC_ANNOUNCE_URL:-}
+      # Optional external announce proxy (the announce-proxy container): its announce-port URL and
+      # this client's key from its Clients tab. Blank = use this app's built-in proxy.
+      ANNOUNCE_PROXY_URL: ${ANNOUNCE_PROXY_URL:-}
+      ANNOUNCE_PROXY_KEY: ${ANNOUNCE_PROXY_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./data:/data
     ports:
       - "${SEEDER_PORT:-8010}:8000"
-      # Announce-only listener for a reverse proxy (see Settings -> Public announce
-      # endpoint). Nothing listens here until it is enabled; the host and container
-      # port are kept equal so one variable controls both.
-      - "${PUBLIC_ANNOUNCE_BIND:-0.0.0.0}:${PUBLIC_ANNOUNCE_PORT:-8001}:${PUBLIC_ANNOUNCE_PORT:-8001}"
     networks:
       vpngate:
         ipv4_address: 192.168.176.10

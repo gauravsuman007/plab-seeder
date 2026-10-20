@@ -24,10 +24,7 @@ Then open `http://localhost:8000`.
 | `QBIT_URL` | `http://gateway:8080` | qBittorrent WebUI base URL. |
 | `GATEWAY_URL` | `http://gateway:8081` | Optional VPN-gateway status panel (informational only). |
 | `APP_PASSWORD` | unset | If set, HTTP Basic auth is required for the whole UI (any username). `/proxy/ann` is exempt (it is gated by its random token). |
-| `PUBLIC_ANNOUNCE_ENABLED` | `false` | Start the announce-only listener (also togglable in Settings). |
-| `PUBLIC_ANNOUNCE_PORT` | `8001` | Compose only: host *and* container port of that listener. |
-| `PUBLIC_ANNOUNCE_BIND` | `0.0.0.0` | Compose only: host interface it is published on (`127.0.0.1` if the reverse proxy is on the same host). |
-| `PUBLIC_ANNOUNCE_URL` | unset | The address your reverse proxy serves, e.g. `https://ann.example.com`. |
+| `ANNOUNCE_PROXY_URL` / `ANNOUNCE_PROXY_KEY` | unset | Use the external announce-proxy container (see below). Also settable in the UI. |
 
 Everything else (PornoLab URL, selection rules, the download guard, pruning)
 is configured from the Settings tab in the UI and stored in
@@ -55,19 +52,14 @@ instead of only adding what you click.
 See [AGENTS.md](AGENTS.md) for the policy an AI agent working on this repo
 follows (credentials, scraping etiquette, scope).
 
-### Making the announce proxy public
+### Announce proxy
 
-The dashboard stays private; only `/proxy/ann` is exposed, on its own port.
-
-1. Enable it in Settings -> *Public announce endpoint* (or `PUBLIC_ANNOUNCE_ENABLED=true`).
-2. Point your reverse proxy at `http://<host>:8001` (or your `PUBLIC_ANNOUNCE_PORT`) for a
-   hostname of your choice, and enter that address as the *Public URL*.
-3. Click *Test public URL*: it should report that the announce listener answered.
-
-The listener serves nothing but `/proxy/ann`, has no access log, and torrents carry
-random tokens rather than your passkey. Torrents added by this app still use
-`SELF_URL` (the internal address qBittorrent reaches); the public URL is for clients
-outside your network.
+By default the seeder hides downloaded bytes with its own built-in announce proxy. To use the
+standalone [`announce-proxy`](announce-proxy/) container instead (its own dashboard, one proxy for
+the seeders, the lean fake-quota app and the Prowlarr sidecar), put its announce-port URL and this
+client's key in *Settings → Announce proxy*, or set `ANNOUNCE_PROXY_URL` / `ANNOUNCE_PROXY_KEY`.
+Torrents already in qBittorrent are moved over within a few minutes. If a proxy is configured but
+unreachable, adding a torrent fails rather than falling back to an unproxied announce.
 
 ## Standalone stack (seeder + qBittorrent)
 

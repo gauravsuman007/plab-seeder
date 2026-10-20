@@ -1,0 +1,27 @@
+# The standalone announce proxy. Deploy with: docker compose up -d
+#
+# Two ports, deliberately different:
+#   ANNOUNCE_PORT  what torrent clients (and a reverse proxy, if you expose it) hit.
+#                  Serves only /ann and the key-gated /v1/* registration API.
+#   UI_PORT        the management dashboard and admin API. Keep this one private.
+#
+# The container-side ports and the host-side ones are separate variables so you can
+# move either without touching the other.
+services:
+  announce-proxy:
+    image: ghcr.io/gauravsuman007/plab-announce-proxy:latest
+    container_name: announce-proxy
+    environment:
+      DATA_DIR: /data
+      ANNOUNCE_PORT: ${ANNOUNCE_PORT:-8101}
+      UI_PORT: ${UI_PORT:-8102}
+      UI_PASSWORD: ${UI_PASSWORD:-}        # optional HTTP Basic (any username) for the UI
+    volumes:
+      - ./data:/data
+    ports:
+      - "${ANNOUNCE_HOST_PORT:-8101}:${ANNOUNCE_PORT:-8101}"
+      - "${UI_HOST_PORT:-8102}:${UI_PORT:-8102}"
+    restart: unless-stopped
+    # A client reaches the proxy over a docker network, so attach this service to each
+    # client's network (see the "Networks" section of the README); a client's torrents
+    # get the address *it* used to reach the proxy.

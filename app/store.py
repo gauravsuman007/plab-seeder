@@ -49,14 +49,11 @@ class GlobalSettings:
     # this app any more (see plab-register), this just points at it.
     register_url: str = os.environ.get("REGISTER_URL", "")
 
-    # Public announce listener: a second, announce-only HTTP server so a
-    # reverse proxy can expose /proxy/ann to the internet (e.g. for a debrid
-    # service that must reach the rewritten announce URL) without exposing
-    # the dashboard. The port is the one the listener binds *inside* the
-    # container; docker-compose publishes the matching host port.
-    public_announce_enabled: bool = os.environ.get("PUBLIC_ANNOUNCE_ENABLED", "").lower() in ("1", "true", "yes")
-    public_announce_port: int = int(os.environ.get("ANNOUNCE_PORT", "8001"))
-    public_announce_url: str = os.environ.get("PUBLIC_ANNOUNCE_URL", "")   # what the reverse proxy serves, e.g. https://ann.example.com
+    # External announce proxy (the announce-proxy container). When set, announce URLs
+    # are registered with it and the .torrent carries its URL instead of this app's own
+    # /proxy/ann; leave blank to keep using the built-in proxy.
+    announce_proxy_url: str = os.environ.get("ANNOUNCE_PROXY_URL", "")     # its announce port, e.g. http://192.168.176.20:8101
+    announce_proxy_key: str = os.environ.get("ANNOUNCE_PROXY_KEY", "")     # this client's key from the proxy's UI
 
 
 @dataclass
@@ -121,7 +118,7 @@ class Settings(GlobalSettings, AccountSettings):
     pass
 
 
-GLOBAL_SECRET_FIELDS = {"qbit_password"}
+GLOBAL_SECRET_FIELDS = {"qbit_password", "announce_proxy_key"}
 ACCOUNT_SECRET_FIELDS = {"pornolab_password"}
 SECRET_FIELDS = GLOBAL_SECRET_FIELDS | ACCOUNT_SECRET_FIELDS     # kept for callers that don't care which
 
@@ -525,6 +522,10 @@ class AccountDB:
 
     def set_first_download(self, token: str) -> None:
         return self._db.set_account_first_download(self.account_id, token)
+
+    def first_download_at(self) -> float | None:
+        row = self._db.get_account(self.account_id)
+        return row["first_download_at"] if row else None
 
     def has_first_download(self) -> bool:
         row = self._db.get_account(self.account_id)

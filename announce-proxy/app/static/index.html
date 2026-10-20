@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Announce Proxy</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Announce Proxy</h1>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="clients">Clients</button>
+    <button class="tab" data-tab="activity">Activity</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <section class="panel active" id="panel-dashboard">
+    <div class="tiles" id="tiles"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Trend by client</h2>
+        <div class="controls">
+          <select id="trendMetric" aria-label="Metric">
+            <option value="4">Upload added</option>
+            <option value="3">Upload from clients</option>
+            <option value="1">Announces</option>
+            <option value="5">Downloads hidden</option>
+            <option value="2">Errors</option>
+          </select>
+          <select id="trendRange" aria-label="Range">
+            <option value="24h">24 hours</option>
+            <option value="7d" selected>7 days</option>
+            <option value="30d">30 days</option>
+            <option value="90d">90 days</option>
+          </select>
+          <button class="btn small" id="trendTableBtn">Table</button>
+        </div>
+      </div>
+      <div id="trendChart" class="chart"></div>
+      <div id="trendLegend" class="legend"></div>
+      <div id="trendTable" class="scroll" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>Who is using it</h2>
+      <div class="scroll"><table class="table" id="clientsTable"></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-clients">
+    <div class="card">
+      <h2>Add a client</h2>
+      <p class="muted small">A client is one thing that talks to the proxy: a seeder, the lean fake-quota app, the Prowlarr
+        sidecar. Each gets its own key. Put the key and this proxy's <em>announce</em> URL in that app's settings.</p>
+      <form id="clientForm" class="row">
+        <input name="name" placeholder="name, e.g. seeder-main" required maxlength="60">
+        <select name="kind">
+          <option value="seeder">seeder</option>
+          <option value="fake-quota">fake-quota</option>
+          <option value="prowlarr">prowlarr</option>
+          <option value="other">other</option>
+        </select>
+        <button class="btn primary" type="submit">Create</button>
+      </form>
+      <div class="notice" id="newKey" hidden></div>
+    </div>
+    <div id="clientList"></div>
+  </section>
+
+  <section class="panel" id="panel-activity">
+    <div class="card">
+      <h2>Recent announces</h2>
+      <div class="scroll"><table class="table" id="activityTable"></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-settings">
+    <div class="card">
+      <h2>Ports</h2>
+      <p class="muted small" id="portsInfo"></p>
+    </div>
+    <div class="card">
+      <h2>Safety</h2>
+      <form id="settingsForm" class="stack">
+        <label class="check"><input type="checkbox" name="allow_remote_api">
+          <span>Accept the registration API through a reverse proxy
+            <span class="muted small">(requests carrying X-Forwarded-For). Off keeps registration to the private network.</span></span></label>
+        <label class="check"><input type="checkbox" name="allow_private_targets">
+          <span>Allow tokens that point at private or loopback addresses
+            <span class="muted small">(off blocks the proxy being aimed at your LAN)</span></span></label>
+        <label>Allowed tracker hosts <span class="muted small">comma-separated; empty = any public host</span>
+          <input name="allowed_hosts" placeholder="pornolab.net, pornolab.cc"></label>
+        <label>Keep the activity log for (days)
+          <input name="retention_days" type="number" min="1" max="3650"></label>
+        <div class="row"><button class="btn primary" type="submit">Save</button><span class="msg" id="settingsMsg"></span></div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div id="tip" class="tip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

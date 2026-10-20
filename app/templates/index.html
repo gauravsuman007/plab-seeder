@@ -121,6 +121,8 @@
           </label>
           <button type="button" class="btn small" id="fakeUploadSaveBtn">Save rate</button>
           <span class="form-msg" id="fakeUploadMsg"></span>
+          <p class="muted small" id="fakeUploadRemoteNote" hidden>Managed in the announce proxy: its dashboard sets
+            the fake-upload rate per account.</p>
         </div>
       </div>
 
@@ -205,29 +207,22 @@
       <div class="grid-2">
 
         <div class="card">
-          <h2>Public announce endpoint</h2>
-          <p class="muted small">Serves <em>only</em> <code>/proxy/ann</code> on its own port, so a reverse proxy
-            can make the announce proxy reachable from the internet (e.g. for a debrid service) while the
-            dashboard stays private. Point the reverse proxy at this container's port below and enter the
-            address it serves. Tokens are random and the passkey never appears in the public URL.</p>
+          <h2>Announce proxy</h2>
+          <p class="muted small">Optional. Point this at the standalone <code>announce-proxy</code> container
+            (its <em>announce</em> port, not its UI port) and torrents announce through it instead of this app's
+            built-in proxy: downloaded bytes are hidden there, and it shows who is using it. Leave blank to keep
+            the built-in proxy. Existing torrents are moved over automatically within a few minutes.</p>
           <div class="form-grid">
-            <label class="checkbox-row">
-              <input type="checkbox" name="public_announce_enabled">
-              <span>Enable the public announce listener</span>
+            <label>Announce proxy URL
+              <input type="text" name="announce_proxy_url" placeholder="http://192.168.176.20:8101" autocomplete="off">
             </label>
-            <label>Listen port (inside the container)
-              <input type="number" name="public_announce_port" min="1" max="65535">
-            </label>
-            <label>Public URL (what the reverse proxy serves)
-              <input type="text" name="public_announce_url" placeholder="https://ann.example.com">
+            <label>API key <span class="muted small">(this client's key, from the proxy's Clients tab)</span>
+              <input type="password" name="announce_proxy_key" autocomplete="new-password" placeholder="pap_…">
             </label>
           </div>
-          <p class="muted small">The port must match the host port published in docker-compose
-            (<code>PUBLIC_ANNOUNCE_PORT</code>, default 8001). Changing it here moves the listener on Save;
-            the compose mapping still has to match.</p>
           <div class="form-actions">
-            <button type="button" class="btn small" id="publicAnnounceTestBtn">Test public URL</button>
-            <span class="form-msg" id="publicAnnounceMsg"></span>
+            <button type="button" class="btn small" id="announceProxyTestBtn">Test connection</button>
+            <span class="form-msg" id="announceProxyMsg"></span>
           </div>
         </div>
 
