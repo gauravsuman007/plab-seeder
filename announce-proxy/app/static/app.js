@@ -185,6 +185,7 @@ function renderTrend() {
 async function loadClients() {
   overview = await api("GET", "/api/overview");
   const info = await api("GET", "/api/info");
+  const publicUrl = (await api("GET", "/api/settings")).public_url;
   const list = $("#clientList");
   if (!overview.clients.length) { list.innerHTML = `<div class="card empty">No clients yet.</div>`; return; }
   list.innerHTML = overview.clients.map((c) => `
@@ -204,6 +205,8 @@ async function loadClients() {
           <input data-field="announce_base" value="${esc(c.announce_base)}" placeholder="blank = the address the client used to reach this proxy" size="46"></label>
         <button class="btn small" data-act="saveBase">Save</button>
       </div>
+      <label class="check small" style="margin-top:8px"><input type="checkbox" data-field="use_public" ${c.use_public ? "checked" : ""}>
+        <span>Hand out the public address ${publicUrl ? `<span class="muted">(${esc(publicUrl)})</span>` : '<span class="muted">— set one in Settings first</span>'}</span></label>
       <div class="idents">${c.identities.length ? c.identities.map((i) => `
         <div class="ident" data-iid="${i.id}">
           <b>${esc(i.label)}</b><span class="muted small">${i.tokens} torrent${i.tokens === 1 ? "" : "s"}${i.ip ? " · " + esc(i.ip) : ""}${i.first_download_at ? "" : " · no download history yet"}</span>
@@ -243,6 +246,13 @@ $("#clientList").addEventListener("click", async (ev) => {
   } catch (e) { alert(e.message); }
 });
 
+$("#clientList").addEventListener("change", async (ev) => {
+  const box = ev.target.closest('input[data-field="use_public"]');
+  if (!box) return;
+  try { await api("PATCH", `/api/clients/${box.closest(".client").dataset.id}`, { use_public: box.checked }); }
+  catch (e) { box.checked = !box.checked; alert(e.message); }
+});
+
 function showKey(name, key) {
   const n = $("#newKey");
   n.hidden = false;
@@ -274,6 +284,7 @@ async function loadActivity() {
 // --------------------------------------------------------------- settings
 async function loadSettings() {
   const [s, info] = await Promise.all([api("GET", "/api/settings"), api("GET", "/api/info")]);
+  $("#publicForm").elements.public_url.value = s.public_url || "";
   const f = $("#settingsForm");
   for (const el of f.elements) {
     if (!el.name || !(el.name in s)) continue;
@@ -282,6 +293,28 @@ async function loadSettings() {
   $("#portsInfo").innerHTML = `Announce listener: <b>${info.announce_port}</b> (point clients and your reverse proxy here — it serves only <code>/ann</code> and the key-gated <code>/v1/*</code> API).
     Management UI: <b>${info.ui_port}</b> (this page; keep it private). Set with <code>ANNOUNCE_PORT</code> / <code>UI_PORT</code> in docker-compose.`;
 }
+let publicTest = { url: "", ok: false };
+$("#publicTestBtn").addEventListener("click", async () => {
+  const url = $("#publicForm").elements.public_url.value.trim();
+  const msg = $("#publicMsg");
+  msg.textContent = "Testing…"; msg.style.color = "";
+  try {
+    const r = await api("POST", "/api/public-url/test", { url });
+    publicTest = { url, ok: r.ok };
+    msg.textContent = r.detail; msg.style.color = r.ok ? "var(--good)" : "var(--bad)";
+  } catch (e) { msg.textContent = e.message; msg.style.color = "var(--bad)"; }
+});
+$("#publicForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const url = ev.target.elements.public_url.value.trim();
+  if (url && !(publicTest.ok && publicTest.url === url) && !confirm("This address hasn't passed the test. Save it anyway?")) return;
+  try {
+    const r = await api("POST", "/api/settings", { public_url: url });
+    ev.target.elements.public_url.value = r.public_url;
+    $("#publicMsg").textContent = r.public_url ? "Saved." : "Cleared."; $("#publicMsg").style.color = "var(--good)";
+  } catch (e) { $("#publicMsg").textContent = e.message; $("#publicMsg").style.color = "var(--bad)"; }
+});
+
 $("#settingsForm").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const body = {};

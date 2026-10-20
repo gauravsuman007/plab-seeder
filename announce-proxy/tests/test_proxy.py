@@ -303,3 +303,74 @@ def test_bootstrap_ramp_belongs_to_the_first_torrent_only(tmp_path):
             await env.announce(a["token"], down=555, info_hash="%AA")
             assert int(env.seen[-1]["downloaded"]) > 0
     run(t, tmp_path)
+
+
+# ---- public address ---------------------------------------------------------
+
+def test_public_url_is_validated_and_normalised(tmp_path):
+    async def t(env):
+        r = await env.ui.post("/api/settings", json={"public_url": " https://ann.example.com/ "})
+        assert r.json()["public_url"] == "https://ann.example.com"
+        for bad in ("ftp://x.test", "ann.example.com", "https://a.test/?x=1", "https://user:pw@a.test"):
+            assert (await env.ui.post("/api/settings", json={"public_url": bad})).status_code == 400, bad
+        assert env.db.settings()["public_url"] == "https://ann.example.com"      # bad values changed nothing
+        assert (await env.ui.post("/api/settings", json={"public_url": ""})).json()["public_url"] == ""
+    run(t, tmp_path)
+
+
+def test_announce_address_precedence(tmp_path):
+    async def t(env):
+        host = (await env.register())["announce_url"]
+        assert host.startswith("http://proxy.test:8101/ann?t=")                       # default: how the client reached us
+        env.db.update_settings({"public_url": "https://ann.example.com"})
+        assert (await env.register())["announce_url"].startswith("http://proxy.test:8101/")   # a public URL alone changes nothing
+        env.db.execute("update clients set announce_base='http://192.168.2.100:8101'")
+        assert (await env.register())["announce_url"].startswith("http://192.168.2.100:8101/")  # per-client override
+        await env.ui.patch(f"/api/clients/{env.client_id}", json={"use_public": True})
+        res = await env.register()
+        assert res["announce_url"] == f"https://ann.example.com/ann?t={res['token']}"          # public wins when switched on
+        env.db.update_settings({"public_url": ""})
+        assert (await env.register())["announce_url"].startswith("http://192.168.2.100:8101/")  # unset: falls back, never blank
+    run(t, tmp_path)
+
+
+def _ui_probing(env, handler):
+    """A UI app whose public-address test goes through `handler` instead of the network."""
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=ui_app.make_app(env.db, client)), base_url="http://ui.test")
+
+
+def test_public_url_probe(tmp_path):
+    async def t(env):
+        # the real thing: the address routes to this proxy's announce app
+        to_announce = httpx.AsyncClient(transport=httpx.ASGITransport(app=announce_app.make_app(env.db, env.http)))
+        ui = httpx.AsyncClient(transport=httpx.ASGITransport(app=ui_app.make_app(env.db, to_announce)), base_url="http://ui.test")
+        r = (await ui.post("/api/public-url/test", json={"url": "https://ann.example.com/"})).json()
+        assert r["ok"], r
+        assert env.db.settings()["public_url"] == ""                                   # testing saves nothing
+        assert not env.seen                                                            # and never reaches a tracker
+
+        # a probe token works once and only for the nonce we issued
+        from app import core
+        nonce = core.new_probe()
+        assert f"probe {nonce}".encode() in (await env.announce(f"probe-{nonce}")).content
+        assert b"bad token" in (await env.announce(f"probe-{nonce}")).content
+        assert b"bad token" in (await env.announce("probe-0000000000000000")).content
+
+        def reply(status, body=b"", headers=None):
+            return _ui_probing(env, lambda req: httpx.Response(status, content=body, headers=headers or {}))
+        other = (await (reply(200, b"<html>welcome to nginx</html>")).post("/api/public-url/test", json={"url": "https://x.test"})).json()
+        assert not other["ok"] and "not from this proxy" in other["detail"]                # some other server answered
+        assert "redirects to https://x.test/" in (await reply(301, headers={"location": "https://x.test/"}).post(
+            "/api/public-url/test", json={"url": "http://x.test"})).json()["detail"]
+        assert "upstream" in (await reply(502).post("/api/public-url/test", json={"url": "https://x.test"})).json()["detail"]
+
+        def refuse(req): raise httpx.ConnectError("[Errno 111] Connection refused")
+        def nodns(req): raise httpx.ConnectError("[Errno -2] Name or service not known")
+        def badcert(req): raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+        for h, word in ((refuse, "Couldn't connect"), (nodns, "doesn't resolve"), (badcert, "certificate")):
+            d = (await _ui_probing(env, h).post("/api/public-url/test", json={"url": "https://x.test"})).json()
+            assert not d["ok"] and word in d["detail"], d
+        assert not (await ui.post("/api/public-url/test", json={"url": "nonsense"})).json()["ok"]
+        assert not (await ui.post("/api/public-url/test", json={})).json()["ok"]
+    run(t, tmp_path)

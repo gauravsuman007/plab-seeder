@@ -26,6 +26,11 @@ def make_app(db: DB, http: httpx.AsyncClient) -> FastAPI:
         return xff or (request.client.host if request.client else "")
 
     def announce_base(request: Request, client: dict) -> str:
+        """The address to put in this client's torrents: the public one if the client is set to
+        use it and one is configured, else its own override, else the address it reached us on."""
+        public = db.settings()["public_url"]
+        if client["use_public"] and public:
+            return public
         if client["announce_base"]:
             return client["announce_base"]
         scheme = request.headers.get("x-forwarded-proto") or request.url.scheme

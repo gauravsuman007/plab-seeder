@@ -100,9 +100,22 @@ SETTING_DEFAULTS = {
     "allow_remote_api": (False, bool),      # accept /v1/* through a reverse proxy (X-Forwarded-For present)
     "allow_private_targets": (False, bool), # let tokens point at private/loopback tracker addresses
     "allowed_hosts": ("", str),             # comma-separated; empty = any public host
+    "public_url": ("", str),                # the reverse proxy's address for the announce port, e.g. https://ann.example.com
     "retention_days": (30, int),            # recent-activity log; hourly rollups are kept 400 days
 }
 HOURLY_KEEP_DAYS = 400
+
+
+def normalize_public_url(value) -> str:
+    """'' or a clean http(s) base URL (no query/fragment, no trailing slash); ValueError otherwise."""
+    from urllib.parse import urlparse
+    v = str(value or "").strip().rstrip("/")
+    if not v:
+        return ""
+    p = urlparse(v)
+    if p.scheme not in ("http", "https") or not p.hostname or p.query or p.fragment or p.username:
+        raise ValueError("enter an address like https://ann.example.com (http or https, no query string)")
+    return v
 
 
 def hash_key(key: str) -> str:
@@ -122,6 +135,10 @@ class DB:
         self.conn.executescript(SCHEMA)
         self._lock = threading.Lock()
         cols = {r["name"] for r in self.conn.execute("pragma table_info(tokens)")}
+        ccols = {r["name"] for r in self.conn.execute("pragma table_info(clients)")}
+        if "use_public" not in ccols:               # hand out the public address instead of the LAN one
+            self.conn.execute("alter table clients add column use_public integer not null default 0")
+            self.conn.commit()
         if "bootstrap_info_hash" not in cols:       # which torrent the bootstrap ramp belongs to
             self.conn.execute("alter table tokens add column bootstrap_info_hash text not null default ''")
             self.conn.commit()
@@ -164,6 +181,8 @@ class DB:
                 v = "1" if v in (True, 1, "1", "true", "on") else "0"
             elif typ is int:
                 v = str(max(1, int(v)))
+            elif k == "public_url":
+                v = normalize_public_url(v)
             else:
                 v = str(v).strip()
             self.execute("insert or replace into settings(key, value) values (?,?)", (k, v))

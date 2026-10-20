@@ -85,6 +85,21 @@
       <p class="muted small" id="portsInfo"></p>
     </div>
     <div class="card">
+      <h2>Public address</h2>
+      <p class="muted small">The address your reverse proxy serves for the <em>announce</em> port, for clients outside your
+        network (a debrid service, a seedbox). Clients set to "hand out the public address" put it in their torrents
+        instead of the LAN address. Test it first: the proxy asks that address for a one-time token and checks that
+        the answer comes from this proxy.</p>
+      <form id="publicForm" class="stack">
+        <label>Public address <input name="public_url" placeholder="https://ann.example.com" autocomplete="off"></label>
+        <div class="row">
+          <button class="btn" type="button" id="publicTestBtn">Test</button>
+          <button class="btn primary" type="submit">Save</button>
+          <span class="msg" id="publicMsg"></span>
+        </div>
+      </form>
+    </div>
+    <div class="card">
       <h2>Safety</h2>
       <form id="settingsForm" class="stack">
         <label class="check"><input type="checkbox" name="allow_remote_api">

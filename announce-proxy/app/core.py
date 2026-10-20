@@ -29,6 +29,19 @@ DEFAULT_UA = "qBittorrent/4.6.0"
 
 _credit_lock = asyncio.Lock()
 
+# One-shot nonces for "does this public address reach THIS proxy?" (see ui_app's test endpoint).
+PROBE_TTL_S = 60
+_probes: dict[str, float] = {}
+
+
+def new_probe() -> str:
+    now = time.time()
+    for k in [k for k, t in _probes.items() if now - t > PROBE_TTL_S]:
+        del _probes[k]
+    nonce = secrets.token_hex(8)
+    _probes[nonce] = now
+    return nonce
+
 
 def bencode_failure(msg: str) -> bytes:
     b = msg.encode()
@@ -104,6 +117,11 @@ def _set(raw: str, name: str, value: int, present: bool) -> str:
 
 async def announce(db: DB, http: httpx.AsyncClient, *, token: str, query: str,
                    remote_ip: str, user_agent: str) -> bytes:
+    if token.startswith("probe-"):
+        nonce = token[6:]
+        if time.time() - _probes.pop(nonce, 0) < PROBE_TTL_S:
+            return bencode_failure(f"probe {nonce}")      # proves the request reached this proxy
+        return bencode_failure("bad token")
     t = db.one("select * from tokens where token=?", (token,))
     ident = db.one("select * from identities where id=?", (t["identity_id"],)) if t else None
     client = db.one("select * from clients where id=?", (ident["client_id"],)) if ident else None

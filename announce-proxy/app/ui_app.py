@@ -10,14 +10,19 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import ANNOUNCE_PORT, UI_PASSWORD, UI_PORT
-from .db import DB
+import httpx
+
+from . import core
+from .db import DB, normalize_public_url
 
 HERE = Path(__file__).parent
 KINDS = ("seeder", "fake-quota", "prowlarr", "other")
+HAIRPIN_NOTE = ("This test runs from the proxy host itself; without hairpin NAT on your router it can fail "
+                "here even though the address works from outside.")
 RANGES = {"24h": (24, 3600), "7d": (7 * 24, 3600), "30d": (30 * 24, 86400), "90d": (90 * 24, 86400)}
 
 
-def make_app(db: DB) -> FastAPI:
+def make_app(db: DB, http: httpx.AsyncClient | None = None) -> FastAPI:
     app = FastAPI(title="announce-proxy", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
@@ -67,7 +72,7 @@ def make_app(db: DB) -> FastAPI:
             "select client_id, sum(announces) a, sum(fake_up) fu, sum(real_up) ru, sum(hidden_down) hd"
             " from hourly group by client_id")}
         clients = []
-        for c in db.rows("select id, name, kind, enabled, announce_base, created_at, last_seen from clients order by name"):
+        for c in db.rows("select id, name, kind, enabled, announce_base, use_public, created_at, last_seen from clients order by name"):
             u, tt = usage.get(c["id"], {}), total.get(c["id"], {})
             idents = db.rows(
                 "select i.id, i.label, i.ip, i.fake_upload, i.fake_mb_per_hour, i.first_download_at, i.last_seen,"
@@ -150,6 +155,8 @@ def make_app(db: DB) -> FastAPI:
             db.execute("update clients set enabled=? where id=?", (int(bool(b["enabled"])), cid))
         if "announce_base" in b:
             db.execute("update clients set announce_base=? where id=?", (str(b["announce_base"]).strip().rstrip("/"), cid))
+        if "use_public" in b:
+            db.execute("update clients set use_public=? where id=?", (int(bool(b["use_public"])), cid))
         if "kind" in b and b["kind"] in KINDS:
             db.execute("update clients set kind=? where id=?", (b["kind"], cid))
         return {"ok": True}
@@ -196,6 +203,46 @@ def make_app(db: DB) -> FastAPI:
 
     @app.post("/api/settings")
     async def set_settings(request: Request):
-        return db.update_settings(await body(request))
+        try:
+            return db.update_settings(await body(request))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/public-url/test")
+    async def test_public_url(request: Request):
+        """Check, without saving anything, that an address really reaches this proxy's
+        announce port: ask it (from here) for a one-shot probe token and look for our nonce."""
+        try:
+            base = normalize_public_url((await body(request)).get("url"))
+        except ValueError as e:
+            return {"ok": False, "detail": str(e)}
+        if not base:
+            return {"ok": False, "detail": "Enter the address your reverse proxy serves, e.g. https://ann.example.com"}
+        nonce = core.new_probe()
+        client = http or httpx.AsyncClient(timeout=10)
+        try:
+            r = await client.get(f"{base}/ann?t=probe-{nonce}", timeout=10, headers={"User-Agent": "announce-proxy-probe"})
+        except httpx.ConnectTimeout:
+            return {"ok": False, "detail": f"Timed out connecting to {base}. " + HAIRPIN_NOTE}
+        except httpx.ConnectError as e:
+            msg = str(e)
+            if "CERTIFICATE" in msg.upper() or "SSL" in msg.upper():
+                return {"ok": False, "detail": "Reached the server but its TLS certificate isn't valid for that domain."}
+            if any(w in msg.lower() for w in ("name or service", "nodename", "resolve", "getaddrinfo")):
+                return {"ok": False, "detail": "That domain doesn't resolve from the proxy's host (check the DNS record)."}
+            return {"ok": False, "detail": f"Couldn't connect to {base}. " + HAIRPIN_NOTE}
+        except httpx.HTTPError as e:
+            return {"ok": False, "detail": f"Request failed ({type(e).__name__}). " + HAIRPIN_NOTE}
+        finally:
+            if http is None:
+                await client.aclose()
+        if b"probe " + nonce.encode() in r.content:
+            return {"ok": True, "detail": f"{base} reaches this proxy's announce port."}
+        if r.status_code in (301, 302, 307, 308):
+            return {"ok": False, "detail": f"{base} redirects to {r.headers.get('location', 'elsewhere')} - enter that address instead."}
+        if r.status_code in (502, 503, 504):
+            return {"ok": False, "detail": "The reverse proxy answered but couldn't reach the announce port - check its upstream (port and host)."}
+        return {"ok": False, "detail": f"{base} answered HTTP {r.status_code}, but not from this proxy - "
+                                       "check the reverse proxy forwards to the announce port, not the UI port."}
 
     return app

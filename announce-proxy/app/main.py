@@ -43,7 +43,7 @@ async def main() -> None:
         # and the announce URL carries the token.
         ann = _EmbeddedServer(uvicorn.Config(announce_app.make_app(db, http), host="0.0.0.0",
                                              port=ANNOUNCE_PORT, log_level="warning", access_log=False))
-        ui = uvicorn.Server(uvicorn.Config(ui_app.make_app(db), host="0.0.0.0", port=UI_PORT, log_level="info", access_log=False))
+        ui = uvicorn.Server(uvicorn.Config(ui_app.make_app(db, http), host="0.0.0.0", port=UI_PORT, log_level="info", access_log=False))
         tasks = [asyncio.create_task(ann.serve()), asyncio.create_task(_prune_loop(db))]
         log.info("announce listener on :%s, management UI on :%s", ANNOUNCE_PORT, UI_PORT)
         try:

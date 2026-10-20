@@ -32,8 +32,17 @@ else — no dashboard, no docs, no access log (the token is in the URL).
    leaves the proxy. Registering the same URL again returns the same token.
 
 The URL handed back is built from the address the client used to reach the proxy, so each client
-automatically gets one that works from where it is. A client's row in the **Clients** tab can
-override that (for example with a public `https://` address for a debrid service).
+automatically gets one that works from where it is. Two ways to change it:
+
+- **Public address** (*Settings*): the address your reverse proxy serves for the announce port, for clients
+  outside your network such as a debrid service. Press **Test** before saving: the proxy asks that address
+  for a one-time token from here and checks that the answer is its own, so a wrong port, a redirect, a bad
+  certificate or a different server behind the domain each get a specific message. Clients with *Hand out the
+  public address* ticked (Clients tab) put it in their torrents; LAN clients keep the LAN address.
+  (The test runs from the proxy's host, so without hairpin NAT it can fail even if the address works from outside.)
+- **Announce URL override** on a client's row: a fixed address for just that client.
+
+Order: public address (if the client uses it and one is set) → the client's override → the address it reached us on.
 
 Each client can have several **accounts** (the label it registers under, normally the PornoLab
 username). Fake upload credit is a per-account setting in the proxy:
