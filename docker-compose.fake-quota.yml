@@ -45,3 +45,21 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
+
+  # This stack's own announce proxy (repo gauravsuman007/plab-ann-proxy, prebuilt multi-arch image).
+  # Point the seeder at it with ANNOUNCE_PROXY_URL=http://announce-proxy:8101 and
+  # ANNOUNCE_PROXY_KEY from its dashboard's Clients tab (UI on host port ${UI_HOST_PORT:-8102}, keep it private).
+  announce-proxy:
+    image: ghcr.io/gauravsuman007/plab-ann-proxy:latest
+    container_name: pornolab-fake-quota-announce-proxy
+    environment:
+      DATA_DIR: /data
+      ANNOUNCE_PORT: 8101
+      UI_PORT: 8102
+      UI_PASSWORD: ${UI_PASSWORD:-}
+    volumes:
+      - ./data/announce-proxy:/data
+    ports:
+      - "${ANNOUNCE_HOST_PORT:-8101}:8101"
+      - "${UI_HOST_PORT:-8102}:8102"
+    restart: unless-stopped

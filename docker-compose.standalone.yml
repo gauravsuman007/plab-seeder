@@ -72,6 +72,28 @@ services:
       start_period: 30s
       retries: 6
 
+  # This stack's own announce proxy (repo gauravsuman007/plab-ann-proxy, prebuilt multi-arch image).
+  # Point the seeder at it with ANNOUNCE_PROXY_URL=http://192.168.209.20:8101 and
+  # ANNOUNCE_PROXY_KEY from its dashboard's Clients tab (UI on host port ${UI_HOST_PORT:-8112}, keep it private).
+  announce-proxy:
+    image: ghcr.io/gauravsuman007/plab-ann-proxy:latest
+    container_name: pornolab-seeder-standalone-announce-proxy
+    environment:
+      DATA_DIR: /data
+      ANNOUNCE_PORT: 8101
+      UI_PORT: 8102
+      UI_PASSWORD: ${UI_PASSWORD:-}
+    volumes:
+      - ./data/announce-proxy:/data
+    ports:
+      - "${ANNOUNCE_HOST_PORT:-8111}:8101"
+      - "${UI_HOST_PORT:-8112}:8102"
+    networks:
+      pornolab_standalone:
+        # Static, so torrents already carrying this address keep announcing after a redeploy.
+        ipv4_address: 192.168.209.20
+    restart: unless-stopped
+
 networks:
   pornolab_standalone:
     name: pornolab-seeder-standalone_default
