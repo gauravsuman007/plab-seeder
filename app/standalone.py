@@ -326,21 +326,38 @@ async def _background_loop() -> None:
 
 # ---- FastAPI app -------------------------------------------------------------
 
+async def _restore_session() -> None:
+    """Re-validate the saved cookies after a restart.
+
+    Only NotLoggedIn means the session is really gone. Anything else (DNS or the
+    network not up yet right after a host reboot) is retried, otherwise a boot-time
+    blip leaves logged_in False forever and the UI asks for a fresh login.
+    """
+    global logged_in, profile, profile_at
+    delay = 5
+    while pl is not None:
+        try:
+            p = await pl.profile()
+        except NotLoggedIn:
+            return
+        except Exception as e:  # noqa: BLE001
+            log.warning("session restore failed (%s); retrying in %ss", e, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)
+            continue
+        logged_in = True
+        profile = p
+        profile_at = time.time()
+        _db.event("Session restored from saved cookies")
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pl
     pl = Pornolab(_store_handle.settings.pornolab_url, _cookies_path)
-    # Restore logged_in state from saved session cookie if present.
     if _cookies_path.exists():
-        global logged_in, profile, profile_at
-        try:
-            p = await pl.profile()
-            logged_in = True
-            profile = p
-            profile_at = time.time()
-            _db.event("Session restored from saved cookies")
-        except Exception:  # noqa: BLE001
-            pass
+        asyncio.create_task(_restore_session())
     asyncio.create_task(_background_loop())
     yield
     await pl.close()
